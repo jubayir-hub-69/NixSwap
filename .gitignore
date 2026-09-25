@@ -1,5 +1,9 @@
 node_modules
+
+# Deployer secrets. Never commit a key, including local or backup copies.
 .env
+.env.*
+!.env.example
 
 # Hardhat files
 /cache

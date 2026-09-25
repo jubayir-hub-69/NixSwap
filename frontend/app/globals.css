@@ -1,26 +1,83 @@
 @import "tailwindcss";
-
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@config "../tailwind.config.ts";
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-void: #05060a;
+  --color-ink: #090d14;
+  --color-panel: #121a24;
+  --color-mist: #93a4b8;
+  --color-frost: #e8f4fb;
+  --color-cyan-glow: #3ef0ff;
+  --color-cyan-deep: #0e7490;
+  --color-violet: #7c5cff;
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --shadow-glow: 0 0 48px rgba(62, 240, 255, 0.18);
+  --shadow-card: 0 30px 80px rgba(0, 0, 0, 0.45);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+:root {
+  color-scheme: dark;
+  --background: #05060a;
+  --foreground: #e8f4fb;
+}
+
+html,
+body {
+  min-height: 100%;
 }
 
 body {
-  background: var(--background);
+  background-color: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+  background-image:
+    radial-gradient(ellipse 70% 45% at 50% -12%, rgba(62, 240, 255, 0.16), transparent 58%),
+    radial-gradient(ellipse 36% 32% at 100% 0%, rgba(124, 92, 255, 0.14), transparent 60%),
+    linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px);
+  background-size: auto, auto, 72px 72px, 72px 72px;
+  background-attachment: fixed;
+}
+
+::selection {
+  background: rgba(62, 240, 255, 0.28);
+  color: #f4fbff;
+}
+
+.glass-panel {
+  background:
+    linear-gradient(180deg, rgba(18, 28, 42, 0.78), rgba(7, 11, 18, 0.9));
+  border: 1px solid rgba(150, 214, 232, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 30px 80px rgba(0, 0, 0, 0.45),
+    0 0 64px rgba(62, 240, 255, 0.07);
+  backdrop-filter: blur(22px);
+}
+
+.glass-bar {
+  background: rgba(6, 10, 16, 0.72);
+  border-bottom: 1px solid rgba(150, 214, 232, 0.12);
+  backdrop-filter: blur(18px);
+}
+
+.field-well {
+  background: rgba(4, 8, 14, 0.55);
+  border: 1px solid rgba(150, 214, 232, 0.1);
+}
+
+.field-well:focus-within {
+  border-color: rgba(62, 240, 255, 0.45);
+  box-shadow: 0 0 0 3px rgba(62, 240, 255, 0.08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

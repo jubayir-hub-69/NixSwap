@@ -1,0 +1,29 @@
+{
+  "84532": {
+    "chainId": 84532,
+    "network": "Base Sepolia",
+    "deployer": "0x9AFe5CeF11fC10756faef213f7A30D9873B5d372",
+    "NixToken": "0xE3FdB021493953C95F4c93bCCF83B762e4475Ed7",
+    "IntentRegistry": "0x609A9D897DB4c554a03d4304c8EF42b56ea32e31",
+    "NixPool": "0xb30c9272a28749Ae0B04E1d5977337a570025009",
+    "NixLaunch": "0x045700Cd0D442E65dcB549330580d9981bcbC5E0"
+  },
+  "421614": {
+    "chainId": 421614,
+    "network": "Arbitrum Sepolia",
+    "deployer": "0x9AFe5CeF11fC10756faef213f7A30D9873B5d372",
+    "NixToken": "0x6da5bd7D6Ef534C387b26Df59930e8F6d36C8d59",
+    "IntentRegistry": "0xDd2BfD7A8D5E29dCcBc37f69F520A74Bd9d461b1",
+    "NixPool": "0xb0575745DDd4c43D70F9d8a890aF52bE047b408b",
+    "NixLaunch": "0x8cf2152c960BE67e0654bd3Bc702be30728501a4"
+  },
+  "11155111": {
+    "chainId": 11155111,
+    "network": "Ethereum Sepolia",
+    "deployer": "0x9AFe5CeF11fC10756faef213f7A30D9873B5d372",
+    "NixToken": "0xE3FdB021493953C95F4c93bCCF83B762e4475Ed7",
+    "IntentRegistry": "0x609A9D897DB4c554a03d4304c8EF42b56ea32e31",
+    "NixPool": "0xb30c9272a28749Ae0B04E1d5977337a570025009",
+    "NixLaunch": "0x045700Cd0D442E65dcB549330580d9981bcbC5E0"
+  }
+}

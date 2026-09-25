@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "description": "",
   "scripts": {
-    "test": "hardhat test"
+    "test": "hardhat test",
+    "deploy": "hardhat run scripts/deploy.ts"
   },
   "keywords": [],
   "author": "",
