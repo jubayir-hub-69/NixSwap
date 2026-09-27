@@ -1,7 +1,12 @@
 "use client";
 
+import { Suspense } from "react";
 import { PoolDesk } from "@/components/PoolDesk";
 
 export default function PoolPage() {
-  return <PoolDesk />;
+  return (
+    <Suspense fallback={null}>
+      <PoolDesk />
+    </Suspense>
+  );
 }

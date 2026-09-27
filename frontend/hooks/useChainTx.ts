@@ -16,25 +16,35 @@ function message(error: unknown) {
 export function useChainTx() {
   const publicClient = usePublicClient();
   const { writeContractAsync } = useWriteContract();
-  const [phase, setPhase] = useState<string | null>(null);
+  const [phase, setPhaseState] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hash, setHash] = useState<Hash | null>(null);
+  const [status, setStatus] = useState<"idle" | "pending" | "success" | "error">("idle");
+
+  function setPhase(next: string) {
+    setError(null);
+    setStatus("pending");
+    setPhaseState(next);
+  }
 
   async function submit(write: () => Promise<Hash>): Promise<TransactionReceipt> {
     if (!publicClient) throw new Error("No RPC client for this network.");
     setError(null);
-    setPhase("Awaiting wallet signature");
+    setStatus("pending");
+    setPhaseState("Awaiting Wallet Signature");
     try {
       const tx = await write();
       setHash(tx);
-      setPhase("Confirming on chain...");
+      setPhaseState("Confirming on chain...");
       const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
       if (receipt.status === "reverted") throw new Error("Transaction reverted.");
-      setPhase("Confirmed");
+      setPhaseState("Confirmed");
+      setStatus("success");
       return receipt;
     } catch (caught) {
-      setPhase(null);
       const text = message(caught);
+      setPhaseState(null);
+      setStatus("error");
       setError(text);
       throw new Error(text);
     }
@@ -48,14 +58,21 @@ export function useChainTx() {
     error,
     hash,
     clear() {
-      setPhase(null);
+      setStatus("idle");
+      setPhaseState(null);
       setError(null);
       setHash(null);
     },
+    succeed(text: string) {
+      setStatus("success");
+      setError(null);
+      setPhaseState(text);
+    },
     fail(text: string) {
-      setPhase(null);
+      setStatus("error");
+      setPhaseState(null);
       setError(text);
     },
-    pending: phase === "Awaiting wallet signature" || phase === "Confirming on chain..." || Boolean(phase && phase !== "Confirmed" && !error),
+    pending: status === "pending",
   };
 }

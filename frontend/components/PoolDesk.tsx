@@ -1,381 +1,343 @@
 "use client";
 
 import { useConnectModal } from "@rainbow-me/rainbowkit";
-import { useState } from "react";
-import { isHex } from "viem";
+import { useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useAccount, useReadContract, useSwitchChain } from "wagmi";
 import { abis } from "@/config/contracts";
 import { TxNotice } from "@/components/TxNotice";
 import { useChainTx } from "@/hooks/useChainTx";
-import { useFhenix } from "@/hooks/useFhenix";
-import { asBigint, asNumber, decimalInput, formatUnits, parseUnits } from "@/lib/amount";
-import { deployedChains, deploymentFor } from "@/lib/deployment";
-
-function ReserveRow({
-  chainId,
-  pool,
-  token,
-  network,
-}: {
-  chainId: number;
-  pool: `0x${string}`;
-  token: `0x${string}`;
-  network: string;
-}) {
-  const reserve = useReadContract({
-    address: pool,
-    abi: abis.NixPool,
-    functionName: "totalReserve",
-    chainId,
-  });
-  const symbol = useReadContract({
-    address: token,
-    abi: abis.NixToken,
-    functionName: "symbol",
-    chainId,
-  });
-  const decimals = useReadContract({
-    address: token,
-    abi: abis.NixToken,
-    functionName: "decimals",
-    chainId,
-  });
-  const value = asBigint(reserve.data);
-  const places = asNumber(decimals.data);
-  const unit = typeof symbol.data === "string" ? symbol.data : "";
-  return (
-    <div className="flex items-center justify-between gap-3 text-sm">
-      <span className="text-mist">{network}</span>
-      <span className="text-frost" data-testid={`reserve-${chainId}`}>
-        {reserve.isLoading
-          ? "Reading…"
-          : reserve.error
-            ? "Read failed"
-            : value !== undefined && places !== undefined
-              ? `${formatUnits(value, places)} ${unit}`
-              : "—"}
-      </span>
-    </div>
-  );
-}
+import { useLaunches } from "@/hooks/useLaunches";
+import { asBigint, decimalInput, formatUnits, parseUnits } from "@/lib/amount";
+import { deployedChains } from "@/lib/deployment";
+import { formatPrice, quoteAdd } from "@/lib/markets";
 
 export function PoolDesk() {
-  const { address, chainId, isConnected } = useAccount();
+  const params = useSearchParams();
+  const requested = params.get("token");
+  const { address, isConnected } = useAccount();
   const { openConnectModal } = useConnectModal();
   const { switchChain, isPending: switching } = useSwitchChain();
-  const { fhenixClient } = useFhenix();
+  const launches = useLaunches();
   const tx = useChainTx();
-  const deployment = deploymentFor(chainId);
-  const [deposit, setDeposit] = useState("");
+  const deployment = launches.deployment;
+  const chainId = launches.chainId;
+  const selected = useMemo(() => {
+    const match = launches.rows.find((row) => row.token.toLowerCase() === requested?.toLowerCase());
+    return match ?? launches.rows[0];
+  }, [launches.rows, requested]);
+  const [choice, setChoice] = useState<string | null>(null);
+  const active = launches.rows.find((row) => row.token === choice) ?? selected;
+  const pair = active?.pair;
+  const [nixAmount, setNixAmount] = useState("");
+  const [tokenAmount, setTokenAmount] = useState("");
   const [shares, setShares] = useState("");
-  const [proof, setProof] = useState("");
-  const [revealed, setRevealed] = useState("");
 
-  const symbol = useReadContract({
-    address: deployment?.NixToken,
-    abi: abis.NixToken,
-    functionName: "symbol",
+  const reserveNix = useReadContract({
+    address: pair,
+    abi: abis.NixPair,
+    functionName: "reserveNix",
     chainId,
-    query: { enabled: Boolean(deployment) },
+    query: { enabled: Boolean(pair) },
   });
-  const decimals = useReadContract({
-    address: deployment?.NixToken,
-    abi: abis.NixToken,
-    functionName: "decimals",
+  const reserveToken = useReadContract({
+    address: pair,
+    abi: abis.NixPair,
+    functionName: "reserveToken",
     chainId,
-    query: { enabled: Boolean(deployment) },
+    query: { enabled: Boolean(pair) },
   });
-  const balance = useReadContract({
-    address: deployment?.NixToken,
-    abi: abis.NixToken,
-    functionName: "balanceOf",
+  const price = useReadContract({
+    address: pair,
+    abi: abis.NixPair,
+    functionName: "priceX18",
+    chainId,
+    query: { enabled: Boolean(pair) },
+  });
+  const totalLiquidity = useReadContract({
+    address: pair,
+    abi: abis.NixPair,
+    functionName: "totalLiquidity",
+    chainId,
+    query: { enabled: Boolean(pair) },
+  });
+  const position = useReadContract({
+    address: pair,
+    abi: abis.NixPair,
+    functionName: "liquidityOf",
     args: address ? [address] : undefined,
     chainId,
-    query: { enabled: Boolean(deployment && address) },
+    query: { enabled: Boolean(pair && address) },
   });
-  const allowance = useReadContract({
+  const nixAllowance = useReadContract({
     address: deployment?.NixToken,
-    abi: abis.NixToken,
+    abi: abis.LaunchToken,
     functionName: "allowance",
-    args: address && deployment ? [address, deployment.NixPool] : undefined,
+    args: address && pair ? [address, pair] : undefined,
     chainId,
-    query: { enabled: Boolean(deployment && address) },
+    query: { enabled: Boolean(deployment && address && pair) },
   });
-  const reserve = useReadContract({
-    address: deployment?.NixPool,
-    abi: abis.NixPool,
-    functionName: "totalReserve",
+  const tokenAllowance = useReadContract({
+    address: active?.token,
+    abi: abis.LaunchToken,
+    functionName: "allowance",
+    args: address && pair ? [address, pair] : undefined,
     chainId,
-    query: { enabled: Boolean(deployment) },
-  });
-  const shareRate = useReadContract({
-    address: deployment?.NixPool,
-    abi: abis.NixPool,
-    functionName: "shareRate",
-    chainId,
-    query: { enabled: Boolean(deployment) },
-  });
-  const shareDecimals = useReadContract({
-    address: deployment?.NixPool,
-    abi: abis.NixPool,
-    functionName: "SHARE_DECIMALS",
-    chainId,
-    query: { enabled: Boolean(deployment) },
-  });
-  const pending = useReadContract({
-    address: deployment?.NixPool,
-    abi: abis.NixPool,
-    functionName: "pendingWithdrawals",
-    args: address ? [address] : undefined,
-    chainId,
-    query: { enabled: Boolean(deployment && address) },
+    query: { enabled: Boolean(active && address && pair) },
   });
 
-  const places = asNumber(decimals.data);
-  const sharePlaces = asNumber(shareDecimals.data);
-  const unit = typeof symbol.data === "string" ? symbol.data : "token";
-  const depositRaw = places === undefined ? undefined : parseUnits(deposit, places);
-  const shareRaw = sharePlaces === undefined ? undefined : parseUnits(shares, sharePlaces);
-  const rate = asBigint(shareRate.data);
-  const allowed = asBigint(allowance.data);
-  const needsApproval = depositRaw !== undefined && depositRaw !== null && allowed !== undefined && allowed < depositRaw;
-  const claimId = pending.data?.[0]?.claimId;
-  const revealedRaw = /^\d+$/.test(revealed) ? BigInt(revealed) : undefined;
+  const nixRaw = parseUnits(nixAmount, 18);
+  const tokenRaw = parseUnits(tokenAmount, 18);
+  const quoted =
+    nixRaw && tokenRaw
+      ? quoteAdd(
+          nixRaw,
+          tokenRaw,
+          asBigint(reserveNix.data) ?? 0n,
+          asBigint(reserveToken.data) ?? 0n,
+          asBigint(totalLiquidity.data) ?? 0n,
+        )
+      : null;
+  const nixAllowed = asBigint(nixAllowance.data);
+  const tokenAllowed = asBigint(tokenAllowance.data);
+  const needsNix = Boolean(quoted && (nixAllowed === undefined || nixAllowed < quoted.nix));
+  const needsToken = Boolean(quoted && (tokenAllowed === undefined || tokenAllowed < quoted.token));
+  const shareRaw = /^\d+$/.test(shares) ? BigInt(shares) : undefined;
+  const owned = asBigint(position.data);
+  const busy = tx.pending || switching;
+  const spot = asBigint(price.data);
 
   async function refresh() {
-    await Promise.all([balance.refetch(), allowance.refetch(), reserve.refetch(), pending.refetch()]);
+    await Promise.all([
+      reserveNix.refetch(),
+      reserveToken.refetch(),
+      price.refetch(),
+      totalLiquidity.refetch(),
+      position.refetch(),
+      nixAllowance.refetch(),
+      tokenAllowance.refetch(),
+    ]);
   }
 
-  async function depositLiquidity() {
-    if (!deployment || !chainId || !depositRaw) return;
+  function fail(error: unknown) {
+    tx.fail(error instanceof Error ? error.message : "Transaction failed.");
+  }
+
+  async function approve(token: `0x${string}`, amount: bigint) {
+    if (!pair || !chainId) return;
     tx.clear();
     try {
-      if (needsApproval) {
-        await tx.submit(() =>
-          tx.writeContractAsync({
-            address: deployment.NixToken,
-            abi: abis.NixToken,
-            functionName: "approve",
-            args: [deployment.NixPool, depositRaw],
-            chainId,
-          }),
-        );
-      }
       await tx.submit(() =>
         tx.writeContractAsync({
-          address: deployment.NixPool,
-          abi: abis.NixPool,
-          functionName: "depositLiquidity",
-          args: [depositRaw],
+          address: token,
+          abi: abis.LaunchToken,
+          functionName: "approve",
+          args: [pair, amount],
           chainId,
         }),
       );
       await refresh();
     } catch (error) {
-      tx.fail(error instanceof Error ? error.message : "Transaction failed.");
+      fail(error);
     }
   }
 
-  async function withdrawLiquidity() {
-    if (!deployment || !chainId || !shareRaw) return;
+  async function deposit() {
+    if (!pair || !chainId || !quoted) return;
     tx.clear();
     try {
-      tx.setPhase("Starting encryption");
-      const encrypted = await fhenixClient.encryptUint64(shareRaw, deployment.NixPool, tx.setPhase);
       await tx.submit(() =>
         tx.writeContractAsync({
-          address: deployment.NixPool,
-          abi: abis.NixPool,
-          functionName: "withdrawLiquidity",
-          args: [encrypted.hash, encrypted.inputProof],
+          address: pair,
+          abi: abis.NixPair,
+          functionName: "addLiquidity",
+          args: [quoted.nix, quoted.token],
           chainId,
         }),
       );
       await refresh();
     } catch (error) {
-      tx.fail(error instanceof Error ? error.message : "Transaction failed.");
+      fail(error);
     }
   }
 
-  async function claimLiquidity() {
-    if (!deployment || !chainId || !claimId || revealedRaw === undefined || !isHex(proof)) return;
+  async function withdraw() {
+    if (!pair || !chainId || !shareRaw) return;
     tx.clear();
     try {
       await tx.submit(() =>
         tx.writeContractAsync({
-          address: deployment.NixPool,
-          abi: abis.NixPool,
-          functionName: "claimLiquidity",
-          args: [claimId, revealedRaw, proof],
+          address: pair,
+          abi: abis.NixPair,
+          functionName: "removeLiquidity",
+          args: [shareRaw],
           chainId,
         }),
       );
       await refresh();
     } catch (error) {
-      tx.fail(error instanceof Error ? error.message : "Transaction failed.");
+      fail(error);
     }
   }
 
-  const busy = tx.pending || switching;
+  let depositLabel = "Deposit liquidity";
+  if (!isConnected) depositLabel = "Connect wallet";
+  else if (!deployment) depositLabel = "Switch network";
+  else if (!active) depositLabel = "No launched token";
+  else if (!quoted) depositLabel = "Enter both amounts";
+  else if (needsNix) depositLabel = "Approve NIX";
+  else if (needsToken) depositLabel = `Approve ${active.symbol}`;
+  if (tx.pending && tx.phase) depositLabel = tx.phase;
 
   return (
     <main className="mx-auto flex w-full max-w-xl flex-1 flex-col gap-4 px-4 py-10 sm:py-14">
       <section className="glass-panel rounded-[28px] p-5">
         <h1 className="text-lg font-semibold tracking-tight">Pool</h1>
-        <div className="mt-4 space-y-2" data-testid="pool-reserves">
-          {deployedChains.map((chain) => (
-            <ReserveRow
-              key={chain.chainId}
-              chainId={chain.chainId}
-              network={chain.network}
-              pool={chain.NixPool}
-              token={chain.NixToken}
-            />
-          ))}
-        </div>
+        <p className="mt-1 text-xs text-mist">Public reserves price the pool. Swap amounts stay encrypted on the Swap page.</p>
+        {!launches.launchpad ? (
+          <p className="mt-4 text-sm text-rose-300">The launchpad contract is not on this network yet.</p>
+        ) : launches.rows.length === 0 ? (
+          <p className="mt-4 text-sm text-mist">Launch a token before adding liquidity.</p>
+        ) : (
+          <>
+            <label className="mt-4 block text-xs text-mist">
+              Token
+              <select
+                data-testid="pool-token"
+                value={active?.token ?? ""}
+                onChange={(event) => setChoice(event.target.value)}
+                className="mt-1 w-full rounded-2xl border border-white/10 bg-ink px-3 py-3 text-sm text-frost"
+              >
+                {launches.rows.map((row) => (
+                  <option key={row.token} value={row.token}>
+                    {row.symbol} · {row.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="mt-4 space-y-2 text-sm" data-testid="pool-reserves">
+              <div className="flex justify-between gap-3">
+                <span className="text-mist">NIX reserve</span>
+                <span className="text-frost">
+                  {reserveNix.isLoading ? "Reading…" : formatUnits(asBigint(reserveNix.data) ?? 0n, 18)}
+                </span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-mist">{active?.symbol} reserve</span>
+                <span className="text-frost">
+                  {reserveToken.isLoading ? "Reading…" : formatUnits(asBigint(reserveToken.data) ?? 0n, 18)}
+                </span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-mist">Price</span>
+                <span className="text-frost" data-testid="pool-price">
+                  {spot === undefined ? "Reading…" : formatPrice(spot)}
+                </span>
+              </div>
+            </div>
+          </>
+        )}
       </section>
 
-      <section className="glass-panel rounded-[28px] p-5">
-        <p className="text-sm text-mist">
-          Your balance{" "}
-          <span className="text-frost" data-testid="token-balance">
-            {balance.isLoading
-              ? "Reading…"
-              : asBigint(balance.data) !== undefined && places !== undefined
-                ? `${formatUnits(asBigint(balance.data)!, places)} ${unit}`
-                : "Connect to read"}
-          </span>
-        </p>
-        <p className="mt-1 text-sm text-mist">
-          Active reserve{" "}
-          <span className="text-frost">
-            {asBigint(reserve.data) !== undefined && places !== undefined
-              ? `${formatUnits(asBigint(reserve.data)!, places)} ${unit}`
-              : deployment
-                ? "Reading…"
-                : "Switch to a deployed network"}
-          </span>
-        </p>
-        {rate !== undefined && places !== undefined ? (
-          <p className="mt-1 text-xs text-mist">
-            Share rate {formatUnits(rate, places)} {unit} per confidential share unit
-          </p>
-        ) : null}
-
-        <form
-          className="mt-4 space-y-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!isConnected) openConnectModal?.();
-            else if (!deployment) switchChain({ chainId: deployedChains[0].chainId });
-            else void depositLiquidity();
-          }}
-        >
-          <label className="field-well block rounded-3xl px-4 py-3">
-            <span className="text-xs text-mist">Deposit {unit}</span>
-            <input
-              data-testid="deposit-input"
-              value={deposit}
-              inputMode="decimal"
-              placeholder="0"
-              aria-label="Deposit amount"
-              onChange={(event) => {
-                const next = decimalInput(event.target.value);
-                if (next !== null) setDeposit(next);
-              }}
-              className="w-full bg-transparent text-3xl text-frost outline-none placeholder:text-white/20"
-            />
-          </label>
-          <button
-            type="submit"
-            data-testid="deposit-action"
-            disabled={Boolean(deployment) && (busy || !depositRaw)}
-            className="h-12 w-full rounded-2xl bg-cyan-glow text-sm font-semibold text-void disabled:opacity-40"
+      {active && pair && deployment ? (
+        <section className="glass-panel rounded-[28px] p-5">
+          <form
+            className="space-y-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!isConnected) openConnectModal?.();
+              else if (!deployment) switchChain({ chainId: deployedChains[0].chainId });
+              else if (needsNix && quoted) void approve(deployment.NixToken, quoted.nix);
+              else if (needsToken && quoted) void approve(active.token, quoted.token);
+              else void deposit();
+            }}
           >
-            {!isConnected
-              ? "Connect wallet"
-              : !deployment
-                ? "Switch network"
-                : tx.phase && tx.phase !== "Confirmed"
-                  ? tx.phase
-                  : needsApproval
-                    ? "Approve and deposit"
-                    : "Deposit liquidity"}
-          </button>
-        </form>
+            <label className="field-well block rounded-3xl px-4 py-3">
+              <span className="text-xs text-mist">NIX amount</span>
+              <input
+                data-testid="deposit-nix"
+                value={nixAmount}
+                inputMode="decimal"
+                placeholder="0"
+                aria-label="NIX amount"
+                onChange={(event) => {
+                  const next = decimalInput(event.target.value);
+                  if (next !== null) setNixAmount(next);
+                }}
+                className="w-full bg-transparent text-3xl text-frost outline-none placeholder:text-white/20"
+              />
+            </label>
+            <label className="field-well block rounded-3xl px-4 py-3">
+              <span className="text-xs text-mist">{active.symbol} amount</span>
+              <input
+                data-testid="deposit-token"
+                value={tokenAmount}
+                inputMode="decimal"
+                placeholder="0"
+                aria-label="Token amount"
+                onChange={(event) => {
+                  const next = decimalInput(event.target.value);
+                  if (next !== null) setTokenAmount(next);
+                }}
+                className="w-full bg-transparent text-3xl text-frost outline-none placeholder:text-white/20"
+              />
+            </label>
+            {quoted ? (
+              <p className="text-xs text-mist">
+                The pool will pull {formatUnits(quoted.nix, 18)} NIX and {formatUnits(quoted.token, 18)} {active.symbol}.
+              </p>
+            ) : null}
+            <button
+              type="submit"
+              data-testid="deposit-action"
+              disabled={Boolean(deployment) && (busy || !quoted)}
+              className="min-h-12 w-full rounded-2xl bg-cyan-glow px-4 py-3 text-sm font-semibold text-void disabled:opacity-40"
+            >
+              {depositLabel}
+            </button>
+          </form>
 
-        <form
-          className="mt-6 space-y-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void withdrawLiquidity();
-          }}
-        >
-          <label className="field-well block rounded-3xl px-4 py-3">
-            <span className="text-xs text-mist">
-              Burn shares ({sharePlaces ?? "…"} decimals)
-            </span>
-            <input
-              data-testid="withdraw-input"
-              value={shares}
-              inputMode="decimal"
-              placeholder="0"
-              aria-label="Shares to burn"
-              onChange={(event) => {
-                const next = decimalInput(event.target.value);
-                if (next !== null) setShares(next);
-              }}
-              className="w-full bg-transparent text-3xl text-frost outline-none placeholder:text-white/20"
-            />
-          </label>
-          <button
-            type="submit"
-            data-testid="withdraw-action"
-            disabled={!deployment || busy || !shareRaw}
-            className="h-12 w-full rounded-2xl border border-cyan-glow/40 text-sm font-semibold text-cyan-glow disabled:opacity-40"
-          >
-            Withdraw encrypted shares
-          </button>
-        </form>
-
-        {pending.data && pending.data.length > 0 ? (
           <form
             className="mt-6 space-y-3"
             onSubmit={(event) => {
               event.preventDefault();
-              void claimLiquidity();
+              void withdraw();
             }}
           >
-            <p className="text-xs text-mist">
-              {pending.data.length} pending withdrawal{pending.data.length === 1 ? "" : "s"}. Claim{" "}
-              <span className="font-mono text-frost">{claimId}</span>
-            </p>
-            <input
-              value={revealed}
-              inputMode="numeric"
-              placeholder="Decrypted share count"
-              aria-label="Decrypted share count"
-              onChange={(event) => setRevealed(event.target.value.replace(/\D/g, ""))}
-              className="w-full rounded-2xl border border-white/10 bg-ink px-3 py-3 text-sm text-frost"
-            />
-            <input
-              value={proof}
-              placeholder="Decryption proof hex"
-              aria-label="Decryption proof"
-              onChange={(event) => setProof(event.target.value.trim())}
-              className="w-full rounded-2xl border border-white/10 bg-ink px-3 py-3 font-mono text-xs text-frost"
-            />
+            <div className="flex items-center justify-between text-xs text-mist">
+              <span>Your pool shares</span>
+              <button
+                type="button"
+                className="text-cyan-glow"
+                onClick={() => owned !== undefined && setShares(owned.toString())}
+              >
+                {owned === undefined ? "Connect to read" : owned.toString()}
+              </button>
+            </div>
+            <label className="field-well block rounded-3xl px-4 py-3">
+              <span className="text-xs text-mist">Shares to withdraw</span>
+              <input
+                data-testid="withdraw-input"
+                value={shares}
+                inputMode="numeric"
+                placeholder="0"
+                aria-label="Shares to withdraw"
+                onChange={(event) => setShares(event.target.value.replace(/\D/g, ""))}
+                className="w-full bg-transparent text-3xl text-frost outline-none placeholder:text-white/20"
+              />
+            </label>
             <button
               type="submit"
-              disabled={busy || revealedRaw === undefined || !isHex(proof)}
-              className="h-11 w-full rounded-2xl border border-white/15 text-sm text-frost disabled:opacity-40"
+              data-testid="withdraw-action"
+              disabled={!pair || busy || !shareRaw}
+              className="min-h-12 w-full rounded-2xl border border-cyan-glow/40 px-4 py-3 text-sm font-semibold text-cyan-glow disabled:opacity-40"
             >
-              Claim liquidity
+              {tx.pending && tx.phase ? tx.phase : "Withdraw liquidity"}
             </button>
           </form>
-        ) : null}
-        <TxNotice phase={tx.phase} error={tx.error} hash={tx.hash} chainId={chainId} />
-      </section>
+          <TxNotice phase={tx.phase} error={tx.error} hash={tx.hash} chainId={chainId} />
+        </section>
+      ) : null}
     </main>
   );
 }

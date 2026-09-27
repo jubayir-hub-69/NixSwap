@@ -6,6 +6,8 @@ const TOKEN_NAME = process.env.NIX_TOKEN_NAME ?? "Nix Token";
 const TOKEN_SYMBOL = process.env.NIX_TOKEN_SYMBOL ?? "NIX";
 const BIDDING_SECONDS = Number(process.env.LAUNCH_BIDDING_SECONDS ?? 7 * 24 * 60 * 60);
 
+const INITIAL_SUPPLY = 1_000_000_000n * 10n ** 18n;
+
 type DeploymentRecord = {
   chainId: number;
   network: string;
@@ -14,6 +16,7 @@ type DeploymentRecord = {
   IntentRegistry: string;
   NixPool: string;
   NixLaunch: string;
+  NixLaunchpad: string;
 };
 
 function envUint(name: string, fallback: bigint): bigint {
@@ -54,6 +57,19 @@ export const deployments = ${JSON.stringify(deployments, null, 2)} as const;
 `;
 }
 
+const L2_CHAIN_IDS = new Set([84532, 421614]);
+
+let nonce = 0;
+let confirmations = 1;
+let deployer!: Awaited<ReturnType<typeof hre.ethers.getSigners>>[number];
+
+type DeployOverrides = {
+  nonce: number;
+  gasLimit?: bigint;
+  maxFeePerGas?: bigint;
+  maxPriorityFeePerGas?: bigint;
+};
+
 async function main() {
   const networkName = hre.network.name;
   const isLocal = networkName === "hardhat" || networkName === "localhost";
@@ -61,10 +77,11 @@ async function main() {
     throw new Error("Set PRIVATE_KEY in .env before deploying to a public network.");
   }
 
-  const [deployer] = await hre.ethers.getSigners();
-  if (!deployer) {
+  const [signer] = await hre.ethers.getSigners();
+  if (!signer) {
     throw new Error("No deployer account is configured for this network.");
   }
+  deployer = signer;
 
   const chainId = Number(hre.network.config.chainId);
   if (!Number.isInteger(chainId)) {
@@ -74,19 +91,26 @@ async function main() {
     throw new Error("LAUNCH_BIDDING_SECONDS must be a positive number of seconds.");
   }
 
-  const token = await hre.ethers.deployContract("NixToken", [
-    TOKEN_NAME,
-    TOKEN_SYMBOL,
-    deployer.address,
-  ]);
-  await token.waitForDeployment();
+  // Base and Arbitrum need two confirmations before eth_call sees the new storage.
+  // Hardhat mines one block per transaction, so it keeps a single confirmation.
+  confirmations = L2_CHAIN_IDS.has(chainId) ? 2 : 1;
+  nonce = await settledNonce(deployer.address);
+  console.log(`Deploying from ${deployer.address} at nonce ${nonce} with ${confirmations} confirmation(s).`);
+
+  const token = await deployFresh("NixToken", [TOKEN_NAME, TOKEN_SYMBOL, deployer.address]);
   const tokenAddress = await token.getAddress();
+  const expectedSupply = await token.INITIAL_SUPPLY();
+  if (expectedSupply !== INITIAL_SUPPLY) {
+    throw new Error(`NixToken.INITIAL_SUPPLY is ${expectedSupply}, expected ${INITIAL_SUPPLY}.`);
+  }
+  const mintReceipt = await send(token.mint(deployer.address, INITIAL_SUPPLY, await overrides()));
+  const supply = await supplyAfterMint(token, mintReceipt.blockNumber, expectedSupply);
+  console.log(`Mint confirmed in block ${mintReceipt.blockNumber}. totalSupply=${supply}`);
 
-  const registry = await hre.ethers.deployContract("IntentRegistry", [deployer.address]);
-  await registry.waitForDeployment();
+  const registry = await deployFresh("IntentRegistry", [deployer.address]);
+  await send(registry.setSolver(deployer.address, true, await overrides()));
 
-  const pool = await hre.ethers.deployContract("NixPool", [tokenAddress]);
-  await pool.waitForDeployment();
+  const pool = await deployFresh("NixPool", [tokenAddress]);
 
   const latest = await hre.ethers.provider.getBlock("latest");
   if (!latest) {
@@ -101,7 +125,7 @@ async function main() {
     process.env.SALE_TOKEN_ADDRESS ?? tokenAddress,
     "SALE_TOKEN_ADDRESS",
   );
-  const launch = await hre.ethers.deployContract("NixLaunch", [
+  const launch = await deployFresh("NixLaunch", [
     paymentToken,
     saleToken,
     envUint("LAUNCH_TOKENS_FOR_SALE", 1_000_000n),
@@ -109,7 +133,8 @@ async function main() {
     envUint("LAUNCH_CURVE_STEP", 1_000n),
     BigInt(latest.timestamp) + BigInt(BIDDING_SECONDS),
   ]);
-  await launch.waitForDeployment();
+
+  const launchpad = await deployFresh("NixLaunchpad", [tokenAddress]);
 
   const record: DeploymentRecord = {
     chainId,
@@ -119,6 +144,7 @@ async function main() {
     IntentRegistry: await registry.getAddress(),
     NixPool: await pool.getAddress(),
     NixLaunch: await launch.getAddress(),
+    NixLaunchpad: await launchpad.getAddress(),
   };
 
   const configDir = path.join(process.cwd(), "frontend", "config");
@@ -132,12 +158,15 @@ async function main() {
     Object.entries(deployments).sort(([left], [right]) => Number(left) - Number(right)),
   );
 
-  const names = ["NixToken", "IntentRegistry", "NixPool", "NixLaunch"] as const;
+  const names = ["NixToken", "IntentRegistry", "NixPool", "NixLaunch", "NixLaunchpad", "NixPair", "LaunchToken"] as const;
   const abis: Record<(typeof names)[number], unknown> = {
     NixToken: [],
     IntentRegistry: [],
     NixPool: [],
     NixLaunch: [],
+    NixLaunchpad: [],
+    NixPair: [],
+    LaunchToken: [],
   };
   for (const name of names) {
     abis[name] = (await hre.artifacts.readArtifact(name)).abi;
@@ -147,10 +176,120 @@ async function main() {
   writeFileSync(tsPath, renderContracts(abis, ordered));
 
   console.log(`Deployed on ${networkName} (${chainId})`);
-  for (const name of names) {
+  console.log(`NIX total supply: ${supply} minted to ${deployer.address}`);
+  console.log("Faucet: claimFaucet() sends 500 NIX from the deployer, once per address per day.");
+  console.log(`Solver whitelisted: ${deployer.address}`);
+  for (const name of ["NixToken", "IntentRegistry", "NixPool", "NixLaunch", "NixLaunchpad"] as const) {
     console.log(`${name}: ${record[name]}`);
   }
   console.log(`Wrote ${path.relative(process.cwd(), tsPath)}`);
+}
+
+async function settledNonce(account: string) {
+  const provider = hre.ethers.provider;
+  let latest = await provider.getTransactionCount(account, "latest");
+  let pending = await provider.getTransactionCount(account, "pending");
+  const started = Date.now();
+  while (pending > latest && Date.now() - started < 90_000) {
+    console.log(`Waiting for in-flight transactions (latest nonce ${latest}, pending nonce ${pending}).`);
+    await delay(3_000);
+    latest = await provider.getTransactionCount(account, "latest");
+    pending = await provider.getTransactionCount(account, "pending");
+  }
+  if (pending !== latest) {
+    throw new Error(
+      `Deployer ${account} still has in-flight transactions (latest nonce ${latest}, pending nonce ${pending}). Wait for them to confirm, then redeploy.`,
+    );
+  }
+  return latest;
+}
+
+async function feeFields() {
+  if (hre.network.name === "hardhat" || hre.network.name === "localhost") return {};
+  const fee = await hre.ethers.provider.getFeeData();
+  const fields: { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint } = {};
+  if (fee.maxPriorityFeePerGas && fee.maxPriorityFeePerGas > 0n) {
+    fields.maxPriorityFeePerGas = fee.maxPriorityFeePerGas * 2n;
+  }
+  if (fee.maxFeePerGas && fee.maxFeePerGas > 0n) {
+    fields.maxFeePerGas = fee.maxFeePerGas * 2n;
+  }
+  if (
+    fields.maxFeePerGas !== undefined &&
+    fields.maxPriorityFeePerGas !== undefined &&
+    fields.maxPriorityFeePerGas > fields.maxFeePerGas
+  ) {
+    fields.maxFeePerGas = fields.maxPriorityFeePerGas;
+  }
+  return fields;
+}
+
+async function overrides(): Promise<DeployOverrides> {
+  const next: DeployOverrides = { nonce, ...(await feeFields()) };
+  nonce += 1;
+  return next;
+}
+
+async function deployFresh(name: string, args: unknown[]) {
+  const factory = await hre.ethers.getContractFactory(name, deployer);
+  const txOverrides = await overrides();
+  const unsigned = await factory.getDeployTransaction(...(args as []));
+  try {
+    const estimated = await deployer.estimateGas({ ...unsigned, nonce: txOverrides.nonce });
+    txOverrides.gasLimit = (estimated * 130n) / 100n + 100_000n;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    console.warn(`Gas estimation reverted for ${name}. Sending with an explicit gas limit. ${detail}`);
+    txOverrides.gasLimit = 30_000_000n;
+  }
+
+  const deployed = await factory.deploy(...(args as []), txOverrides);
+  const sent = deployed.deploymentTransaction();
+  if (!sent) throw new Error(`${name} did not produce a deployment transaction.`);
+  const receipt = await sent.wait(confirmations);
+  if (!receipt || receipt.status !== 1 || !receipt.contractAddress) {
+    throw new Error(`${name} deployment ${sent.hash} was not confirmed.`);
+  }
+
+  // Read code at the receipt block. Do not trust a cached address from an earlier deploy.
+  const code = await hre.ethers.provider.getCode(receipt.contractAddress, receipt.blockNumber);
+  if (!code || code === "0x") {
+    throw new Error(`${name} has no code at ${receipt.contractAddress} in block ${receipt.blockNumber}.`);
+  }
+  console.log(`${name} deployed at ${receipt.contractAddress} (nonce ${txOverrides.nonce}, tx ${sent.hash}).`);
+  return hre.ethers.getContractAt(name, receipt.contractAddress, deployer);
+}
+
+async function send(pending: Promise<{ wait: (confirms: number) => Promise<{ status: number | null; blockNumber: number; hash: string } | null>; hash: string }>) {
+  const tx = await pending;
+  const receipt = await tx.wait(confirmations);
+  if (!receipt || receipt.status !== 1) {
+    throw new Error(`Transaction ${tx.hash} did not confirm.`);
+  }
+  return receipt;
+}
+
+async function supplyAfterMint(
+  token: { totalSupply: (opts?: { blockTag: number }) => Promise<bigint> },
+  blockNumber: number,
+  expected: bigint,
+) {
+  let seen = 0n;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      seen = await token.totalSupply({ blockTag: blockNumber });
+    } catch {
+      seen = await token.totalSupply();
+    }
+    if (seen === expected) return seen;
+    console.log(`totalSupply is ${seen} at block ${blockNumber}; waiting for the L2 state (${attempt + 1}/6).`);
+    await delay(2_000);
+  }
+  throw new Error(`NIX total supply is ${seen}, expected exactly ${expected}.`);
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 main().catch((error: unknown) => {

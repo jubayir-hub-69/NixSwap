@@ -4,13 +4,15 @@ import { ConnectButton } from "@rainbow-me/rainbowkit";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
+import { FaucetButton } from "@/components/FaucetButton";
 import { Logo } from "@/components/Logo";
 
 const links = [
+  { href: "/markets", label: "Markets" },
   { href: "/", label: "Swap" },
   { href: "/pool", label: "Pool" },
-  { href: "/trade", label: "Trade" },
   { href: "/launch", label: "Launch" },
+  { href: "/trade", label: "Trade" },
 ];
 
 function NavLinks({
@@ -73,6 +75,7 @@ export function Navbar() {
               <span className={`block h-px bg-current transition ${open ? "-translate-y-[5px] -rotate-45" : ""}`} />
             </span>
           </button>
+          <FaucetButton />
           <ConnectButton
             label="Connect"
             accountStatus={{ smallScreen: "avatar", largeScreen: "full" }}

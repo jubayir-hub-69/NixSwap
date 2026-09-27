@@ -32,6 +32,17 @@ contract NixToken is ERC20, Ownable, EIP712, Nonces {
     /// @notice Public base units represented by one confidential unit (1e12 for 18/6).
     uint256 public constant CONVERSION_RATE = 10 ** (18 - CONFIDENTIAL_DECIMALS);
 
+    /// @notice Supply minted to the deployer at deployment. The owner can mint or burn after that.
+    uint256 public constant INITIAL_SUPPLY = 1_000_000_000 * 10 ** 18;
+
+    /// @notice Public testnet drip transferred from the owner. One claim per address per day.
+    uint256 public constant FAUCET_DRIP = 500 * 10 ** 18;
+
+    uint256 public constant FAUCET_COOLDOWN = 1 days;
+
+    /// @notice Most the faucet can move out of the owner's balance.
+    uint256 public constant FAUCET_BUDGET = 100_000_000 * 10 ** 18;
+
     /// @dev Binds a signature to the holder's current ciphertext, not to a plaintext amount.
     bytes32 private constant BALANCE_VIEW_PERMIT_TYPEHASH = keccak256(
         "BalanceViewPermit(address holder,address viewer,bytes32 balanceHandle,uint256 nonce,uint256 deadline)"
@@ -50,6 +61,8 @@ contract NixToken is ERC20, Ownable, EIP712, Nonces {
     mapping(bytes32 claimId => Claim claim) private _claims;
     mapping(address account => bytes32[] claimIds) private _userClaimIds;
     mapping(address account => uint256 nonce) private _unshieldNonces;
+    mapping(address account => uint256 readyAt) public faucetReadyAt;
+    uint256 public faucetSpent;
 
     /// @dev Set only around the internal pool transfer so users cannot move the backing directly.
     uint256 private _poolMove;
@@ -59,6 +72,7 @@ contract NixToken is ERC20, Ownable, EIP712, Nonces {
     event UnshieldedTokensClaimed(address indexed account, bytes32 indexed claimId, euint64 amount);
     event ConfidentialTransfer(address indexed from, address indexed to, euint64 amount);
     event BalanceViewPermitUsed(address indexed holder, address indexed viewer, bytes32 balanceHandle);
+    event FaucetClaimed(address indexed account);
 
     error AmountTooSmallForConfidentialPrecision();
     error UnauthorizedEncryptedAmount(euint64 value, address user);
@@ -71,6 +85,8 @@ contract NixToken is ERC20, Ownable, EIP712, Nonces {
     error InvalidPermitSignature();
     error NoConfidentialBalance(address holder);
     error BalanceHandleMismatch(bytes32 currentHandle, bytes32 signedHandle);
+    error FaucetCoolingDown(uint256 readyAt);
+    error FaucetEmpty();
 
     constructor(string memory name_, string memory symbol_, address initialOwner)
         ERC20(name_, symbol_)
@@ -78,9 +94,26 @@ contract NixToken is ERC20, Ownable, EIP712, Nonces {
         EIP712(name_, "1")
     {}
 
-    /// @notice Mints public ERC-20 units. Holders shield them to open a confidential balance.
+    /// @notice Mints public ERC-20 units. Deployment mints `INITIAL_SUPPLY` to the deployer.
+    ///         The owner can mint more later. Holders shield tokens to open a confidential balance.
     function mint(address to, uint256 amount) external onlyOwner {
         _mint(to, amount);
+    }
+
+    /// @notice Burns public NIX from the owner's balance and reduces total supply.
+    function burn(uint256 amount) external onlyOwner {
+        _burn(owner(), amount);
+    }
+
+    /// @notice Sends `FAUCET_DRIP` from the owner to the caller. One claim per cooldown.
+    ///         The drip size is constant. It does not reveal or change a confidential balance.
+    function claimFaucet() external {
+        if (block.timestamp < faucetReadyAt[msg.sender]) revert FaucetCoolingDown(faucetReadyAt[msg.sender]);
+        if (faucetSpent + FAUCET_DRIP > FAUCET_BUDGET) revert FaucetEmpty();
+        faucetReadyAt[msg.sender] = block.timestamp + FAUCET_COOLDOWN;
+        faucetSpent += FAUCET_DRIP;
+        _transfer(owner(), msg.sender, FAUCET_DRIP);
+        emit FaucetClaimed(msg.sender);
     }
 
     function confidentialDecimals() external pure returns (uint8) {

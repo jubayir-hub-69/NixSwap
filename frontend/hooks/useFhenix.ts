@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 import type { Address } from "viem";
 import { useAccount, usePublicClient, useWalletClient } from "wagmi";
-import type { CofheClient, EncryptStep } from "@cofhe/sdk";
+import type { CofheClient, DecryptPollCallbackContext, EncryptStep } from "@cofhe/sdk";
 
 type ConnectArgs = Parameters<CofheClient["connect"]>;
 
@@ -27,6 +27,14 @@ export type EncryptedPair = {
   second: `0x${string}`;
   inputProof: `0x${string}`;
 };
+
+export type TxPlaintext = {
+  value: bigint;
+  signature: `0x${string}`;
+};
+
+/** CoFHE keeps returning 404 until a fresh ciphertext is indexed. The client caps the whole decrypt at 5 minutes. */
+const DECRYPT_404_WAIT_MS = 4 * 60 * 1000;
 
 const stepLabel: Record<EncryptStep, string> = {
   initTfhe: "Starting encryption",
@@ -113,7 +121,33 @@ type FhenixClient = {
     consumingContract: Address,
     onStep?: StepHandler,
   ) => Promise<EncryptedPair>;
+  decryptForTx: (
+    ctHash: `0x${string}`,
+    access: "public" | "holder",
+    onStep?: StepHandler,
+  ) => Promise<TxPlaintext>;
+  decryptUint64: (ctHash: `0x${string}`, onStep?: StepHandler) => Promise<bigint>;
 };
+
+function watchDecrypt<T extends { onPoll: (callback: (context: DecryptPollCallbackContext) => void) => T }>(
+  builder: T,
+  onStep?: StepHandler,
+) {
+  let lastSecond = -1;
+  return builder.onPoll((context) => {
+    const seconds = Math.floor(context.elapsedMs / 1000);
+    if (seconds === lastSecond) return;
+    lastSecond = seconds;
+    onStep?.(`Waiting for CoFHE decryption (${seconds}s)`);
+  });
+}
+
+function asUint64(value: bigint) {
+  if (value < 0n || value > UINT64_MAX) {
+    throw new Error("Decrypted value does not fit in uint64.");
+  }
+  return value;
+}
 
 export function useFhenix() {
   const { address, chainId, isConnected } = useAccount();
@@ -247,9 +281,59 @@ export function useFhenix() {
     [withClient],
   );
 
+  const decryptForTx = useCallback(
+    async (ctHash: `0x${string}`, access: "public" | "holder", onStep?: StepHandler) => {
+      return withClient(async (client, report) => {
+        const tell = (label: string) => {
+          report(label);
+          onStep?.(label);
+        };
+        if (access === "holder") {
+          tell("Awaiting decrypt permission");
+          await client.acp.getOrCreateSelfACP();
+        }
+        tell("Decrypting on CoFHE");
+        const waiting = watchDecrypt(
+          client.decryptForTx(ctHash).set404RetryTimeout(DECRYPT_404_WAIT_MS),
+          tell,
+        );
+        const result = await (access === "public" ? waiting.withoutACP() : waiting.withACP()).execute();
+        return {
+          value: asUint64(BigInt(result.decryptedValue)),
+          signature: asProof(result.signature),
+        };
+      });
+    },
+    [withClient],
+  );
+
+  const decryptUint64 = useCallback(
+    async (ctHash: `0x${string}`, onStep?: StepHandler) => {
+      return withClient(async (client, report) => {
+        const tell = (label: string) => {
+          report(label);
+          onStep?.(label);
+        };
+        tell("Awaiting decrypt permission");
+        await client.acp.getOrCreateSelfACP();
+        tell("Decrypting balance");
+        const { FheTypes } = await import("@cofhe/sdk");
+        const value = await watchDecrypt(
+          client.decryptForView(ctHash, FheTypes.Uint64).set404RetryTimeout(DECRYPT_404_WAIT_MS),
+          tell,
+        ).execute();
+        if (typeof value !== "bigint") {
+          throw new Error("Decryption did not return an integer.");
+        }
+        return asUint64(value);
+      });
+    },
+    [withClient],
+  );
+
   const fhenixClient = useMemo<FhenixClient>(
-    () => ({ encrypt, encryptUint64, encryptUint64Pair }),
-    [encrypt, encryptUint64, encryptUint64Pair],
+    () => ({ encrypt, encryptUint64, encryptUint64Pair, decryptForTx, decryptUint64 }),
+    [encrypt, encryptUint64, encryptUint64Pair, decryptForTx, decryptUint64],
   );
 
   return {

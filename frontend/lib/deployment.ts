@@ -10,6 +10,14 @@ export function deploymentFor(chainId: number | undefined) {
 
 export const deployedChains = Object.values(deployments);
 
+export function optionalAddress(record: object | undefined, key: string): `0x${string}` | undefined {
+  if (!record || !(key in record)) return undefined;
+  const value = (record as Record<string, unknown>)[key];
+  if (typeof value !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(value)) return undefined;
+  if (/^0x0+$/i.test(value)) return undefined;
+  return value as `0x${string}`;
+}
+
 const explorers: Record<number, string> = {
   421614: "https://sepolia.arbiscan.io",
   84532: "https://sepolia.basescan.org",

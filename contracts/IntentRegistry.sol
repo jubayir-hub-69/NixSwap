@@ -44,7 +44,13 @@ contract IntentRegistry is Ownable {
     }
 
     mapping(address solver => bool allowed) private _solvers;
+    struct SwapRoute {
+        address tokenIn;
+        address tokenOut;
+    }
+
     mapping(uint256 intentId => EncryptedIntent intent) private _intents;
+    mapping(uint256 intentId => SwapRoute route) private _routes;
     uint256 private _nextIntentId = 1;
 
     event SolverUpdated(address indexed solver, bool allowed);
@@ -56,8 +62,10 @@ contract IntentRegistry is Ownable {
         uint64 expiresAt
     );
     event SolverAccessGranted(uint256 indexed intentId, address indexed solver);
+    event SwapRouteRecorded(uint256 indexed intentId, address tokenIn, address tokenOut);
 
     error SolverNotWhitelisted(address solver);
+    error InvalidRoute();
     error IntentWindowInvalid(uint64 expiresAt);
     error IntentNotFound(uint256 intentId);
     error IntentExpired(uint256 intentId);
@@ -94,6 +102,46 @@ contract IntentRegistry is Ownable {
         address solver,
         uint64 expiresAt
     ) external returns (uint256 intentId) {
+        return _submit(intentType, encryptedAmount, encryptedTargetChain, encryptedLimit, inputProof, solver, expiresAt);
+    }
+
+    /// @notice Same encrypted payload as `submitIntent`, plus the public token route.
+    ///         Token addresses are public market metadata. Amount and limit stay ciphertext.
+    function submitSwapIntent(
+        address tokenIn,
+        address tokenOut,
+        IntentType intentType,
+        externalEuint64 encryptedAmount,
+        externalEuint32 encryptedTargetChain,
+        externalEuint64 encryptedLimit,
+        bytes calldata inputProof,
+        address solver,
+        uint64 expiresAt
+    ) external returns (uint256 intentId) {
+        if (tokenIn == address(0) || tokenOut == address(0) || tokenIn == tokenOut) revert InvalidRoute();
+        intentId = _submit(
+            intentType, encryptedAmount, encryptedTargetChain, encryptedLimit, inputProof, solver, expiresAt
+        );
+        _routes[intentId] = SwapRoute({tokenIn: tokenIn, tokenOut: tokenOut});
+        emit SwapRouteRecorded(intentId, tokenIn, tokenOut);
+    }
+
+    /// @notice Public pair for an intent. Empty addresses mean the intent was not a routed swap.
+    function swapRoute(uint256 intentId) external view returns (address tokenIn, address tokenOut) {
+        if (_intents[intentId].user == address(0)) revert IntentNotFound(intentId);
+        SwapRoute memory route = _routes[intentId];
+        return (route.tokenIn, route.tokenOut);
+    }
+
+    function _submit(
+        IntentType intentType,
+        externalEuint64 encryptedAmount,
+        externalEuint32 encryptedTargetChain,
+        externalEuint64 encryptedLimit,
+        bytes calldata inputProof,
+        address solver,
+        uint64 expiresAt
+    ) internal returns (uint256 intentId) {
         if (!_solvers[solver]) revert SolverNotWhitelisted(solver);
         if (expiresAt <= block.timestamp || expiresAt > block.timestamp + MAX_WINDOW) {
             revert IntentWindowInvalid(expiresAt);

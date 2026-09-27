@@ -97,4 +97,54 @@ describe("IntentRegistry", function () {
     await registry.connect(owner).setSolver(solver.address, false);
     expect(await registry.isSolver(solver.address)).to.equal(false);
   });
+
+  it("stores the public swap route and leaves the amount encrypted", async function () {
+    const { registry, user, solver, userClient } = await deploy();
+    const latest = await time.latest();
+    const expiresAt = BigInt(latest + 600);
+    const amount = 1_500_000n;
+    const targetChain = 421614;
+    const limit = 900_000n;
+    const tokenIn = "0x0000000000000000000000000000000000000001";
+    const tokenOut = "0x0000000000000000000000000000000000000002";
+    const [encryptedAmount, encryptedTargetChain, encryptedLimit, inputProof] = await userClient
+      .encryptInputs([
+        Encryptable.uint64(amount),
+        Encryptable.uint32(targetChain),
+        Encryptable.uint64(limit),
+      ])
+      .setConsumingContract(await registry.getAddress())
+      .execute();
+
+    await expect(
+      registry.connect(user).submitSwapIntent(
+        tokenIn,
+        tokenIn,
+        0,
+        encryptedAmount,
+        encryptedTargetChain,
+        encryptedLimit,
+        inputProof,
+        solver.address,
+        expiresAt
+      )
+    ).to.be.revertedWithCustomError(registry, "InvalidRoute");
+
+    const tx = await registry
+      .connect(user)
+      .submitSwapIntent(
+        tokenIn,
+        tokenOut,
+        0,
+        encryptedAmount,
+        encryptedTargetChain,
+        encryptedLimit,
+        inputProof,
+        solver.address,
+        expiresAt
+      );
+    const receipt = await tx.wait();
+    expect(JSON.stringify(receipt?.logs ?? [])).to.not.include(amount.toString());
+    expect(await registry.swapRoute(1)).to.deep.equal([tokenIn, tokenOut]);
+  });
 });

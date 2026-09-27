@@ -116,6 +116,34 @@ describe("NixToken", function () {
     );
   });
 
+  it("mints the initial billion, lets the owner mint and burn, and drips 500 NIX", async function () {
+    const { token, owner, alice } = await deploy();
+    const supply = await token.INITIAL_SUPPLY();
+    expect(supply).to.equal(1_000_000_000n * ONE);
+    expect(await token.FAUCET_DRIP()).to.equal(500n * ONE);
+
+    await token.connect(owner).mint(owner.address, supply);
+    expect(await token.totalSupply()).to.equal(supply);
+    expect(await token.balanceOf(owner.address)).to.equal(supply);
+
+    await token.connect(owner).mint(owner.address, ONE);
+    expect(await token.totalSupply()).to.equal(supply + ONE);
+    await token.connect(owner).burn(ONE);
+    expect(await token.balanceOf(owner.address)).to.equal(supply);
+    expect(await token.totalSupply()).to.equal(supply);
+    await expect(token.connect(alice).mint(alice.address, ONE)).to.be.revertedWithCustomError(
+      token,
+      "OwnableUnauthorizedAccount"
+    );
+    await expect(token.connect(alice).burn(ONE)).to.be.revertedWithCustomError(token, "OwnableUnauthorizedAccount");
+
+    await token.connect(alice).claimFaucet();
+    expect(await token.balanceOf(alice.address)).to.equal(500n * ONE);
+    expect(await token.balanceOf(owner.address)).to.equal(supply - 500n * ONE);
+    expect(await token.totalSupply()).to.equal(supply);
+    await expect(token.connect(alice).claimFaucet()).to.be.revertedWithCustomError(token, "FaucetCoolingDown");
+  });
+
   it("rejects a direct transfer into the confidential pool", async function () {
     const { token, owner, alice } = await deploy();
     await token.connect(owner).mint(alice.address, ONE);
