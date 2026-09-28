@@ -27,6 +27,19 @@ export function parseUnits(value: string, decimals: number): bigint | null {
   }
 }
 
+export function formatBalance(
+  connected: boolean,
+  loading: boolean,
+  error: boolean,
+  value: bigint | undefined,
+  decimals: number,
+) {
+  if (!connected) return "Connect to read";
+  if (loading) return "Reading…";
+  if (error || value === undefined) return "Unavailable";
+  return formatUnits(value, decimals);
+}
+
 export function formatUnits(value: bigint, decimals: number, maxFraction = 6): string {
   const base = 10n ** BigInt(decimals);
   const whole = value / base;

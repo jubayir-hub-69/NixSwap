@@ -97,6 +97,11 @@ async function main() {
   nonce = await settledNonce(deployer.address);
   console.log(`Deploying from ${deployer.address} at nonce ${nonce} with ${confirmations} confirmation(s).`);
 
+  if (process.env.REPLACE_LAUNCHPAD === "1") {
+    await replaceLaunchpad(chainId, networkName);
+    return;
+  }
+
   const token = await deployFresh("NixToken", [TOKEN_NAME, TOKEN_SYMBOL, deployer.address]);
   const tokenAddress = await token.getAddress();
   const expectedSupply = await token.INITIAL_SUPPLY();
@@ -135,6 +140,7 @@ async function main() {
   ]);
 
   const launchpad = await deployFresh("NixLaunchpad", [tokenAddress]);
+  await fundLaunchSeed(token, launchpad);
 
   const record: DeploymentRecord = {
     chainId,
@@ -147,13 +153,81 @@ async function main() {
     NixLaunchpad: await launchpad.getAddress(),
   };
 
+  await writeFrontendConfig({ [String(chainId)]: record });
+
+  console.log(`Deployed on ${networkName} (${chainId})`);
+  console.log(`NIX total supply: ${supply} minted to ${deployer.address}`);
+  console.log("Faucet: claimFaucet() sends 500 NIX from the deployer, once per address per day.");
+  console.log(`Solver whitelisted: ${deployer.address}`);
+  for (const name of ["NixToken", "IntentRegistry", "NixPool", "NixLaunch", "NixLaunchpad"] as const) {
+    console.log(`${name}: ${record[name]}`);
+  }
+}
+
+type SeedToken = {
+  balanceOf: (account: string) => Promise<bigint>;
+  approve: (
+    spender: string,
+    amount: bigint,
+    txOverrides: DeployOverrides,
+  ) => Promise<{
+    wait: (confirms: number) => Promise<{ status: number | null; blockNumber: number; hash: string } | null>;
+    hash: string;
+  }>;
+};
+
+type SeedLaunchpad = {
+  getAddress: () => Promise<string>;
+  SEED_NIX: () => Promise<bigint>;
+  fundSeed: (
+    amount: bigint,
+    txOverrides: DeployOverrides,
+  ) => Promise<{
+    wait: (confirms: number) => Promise<{ status: number | null; blockNumber: number; hash: string } | null>;
+    hash: string;
+  }>;
+};
+
+async function fundLaunchSeed(token: SeedToken, launchpad: SeedLaunchpad) {
+  const launchpadAddress = await launchpad.getAddress();
+  const seed = await launchpad.SEED_NIX();
+  const balance = await token.balanceOf(deployer.address);
+  const covered = balance / seed;
+  if (covered < 1n) {
+    throw new Error(`Deployer NIX balance ${balance} is below one seed of ${seed}.`);
+  }
+  const launches = covered > 100n ? 100n : covered;
+  const budget = seed * launches;
+  await send(token.approve(launchpadAddress, budget, await overrides()));
+  await send(launchpad.fundSeed(budget, await overrides()));
+  console.log(`Funded ${launchpadAddress} with ${budget} NIX (${launches} opening pools).`);
+}
+
+async function replaceLaunchpad(chainId: number, networkName: string) {
+  const jsonPath = path.join(process.cwd(), "frontend", "config", "deployments.json");
+  const deployments = loadDeployments(jsonPath);
+  const existing = deployments[String(chainId)];
+  if (!existing?.NixToken) {
+    throw new Error(`No NixToken is saved for chain ${chainId}.`);
+  }
+  const token = await hre.ethers.getContractAt("NixToken", existing.NixToken, deployer);
+  const launchpad = await deployFresh("NixLaunchpad", [existing.NixToken]);
+  await fundLaunchSeed(token, launchpad);
+  existing.NixLaunchpad = await launchpad.getAddress();
+  existing.network = networkName;
+  existing.deployer = deployer.address;
+  await writeFrontendConfig({ [String(chainId)]: existing });
+  console.log(`Replaced NixLaunchpad on ${networkName}: ${existing.NixLaunchpad}`);
+}
+
+async function writeFrontendConfig(updates: Record<string, DeploymentRecord>) {
   const configDir = path.join(process.cwd(), "frontend", "config");
   const jsonPath = path.join(configDir, "deployments.json");
   const tsPath = path.join(configDir, "contracts.ts");
   mkdirSync(configDir, { recursive: true });
 
   const deployments = loadDeployments(jsonPath);
-  deployments[String(chainId)] = record;
+  Object.assign(deployments, updates);
   const ordered = Object.fromEntries(
     Object.entries(deployments).sort(([left], [right]) => Number(left) - Number(right)),
   );
@@ -174,14 +248,6 @@ async function main() {
 
   writeFileSync(jsonPath, `${JSON.stringify(ordered, null, 2)}\n`);
   writeFileSync(tsPath, renderContracts(abis, ordered));
-
-  console.log(`Deployed on ${networkName} (${chainId})`);
-  console.log(`NIX total supply: ${supply} minted to ${deployer.address}`);
-  console.log("Faucet: claimFaucet() sends 500 NIX from the deployer, once per address per day.");
-  console.log(`Solver whitelisted: ${deployer.address}`);
-  for (const name of ["NixToken", "IntentRegistry", "NixPool", "NixLaunch", "NixLaunchpad"] as const) {
-    console.log(`${name}: ${record[name]}`);
-  }
   console.log(`Wrote ${path.relative(process.cwd(), tsPath)}`);
 }
 

@@ -12,35 +12,69 @@ export type LaunchRow = {
   active: boolean;
 };
 
+function asAddress(value: unknown): `0x${string}` | undefined {
+  if (typeof value !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(value)) return undefined;
+  return value as `0x${string}`;
+}
+
+function asUnits(value: unknown): bigint | undefined {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return BigInt(Math.trunc(value));
+  if (typeof value === "string" && /^\d+$/.test(value)) return BigInt(value);
+  return undefined;
+}
+
+function field(record: Record<string, unknown>, key: string, index: number) {
+  const named = record[key];
+  if (named !== undefined) return named;
+  return record[index];
+}
+
+/** Accepts a named struct or a positional tuple from `allTokens` / `tokenInfo`. */
+export function parseLaunch(item: unknown, index: number): LaunchRow | undefined {
+  if (!item || typeof item !== "object") return undefined;
+  const record = item as Record<string, unknown>;
+  const token = asAddress(field(record, "token", 0));
+  const pair = asAddress(field(record, "pair", 1));
+  const creator = asAddress(field(record, "creator", 2));
+  const nameValue = field(record, "name", 3);
+  const symbolValue = field(record, "symbol", 4);
+  const supply = asUnits(field(record, "supply", 5));
+  const createdAt = asUnits(field(record, "createdAt", 6));
+  const activeValue = field(record, "active", 7);
+  if (
+    !token ||
+    !pair ||
+    !creator ||
+    typeof nameValue !== "string" ||
+    nameValue.length === 0 ||
+    typeof symbolValue !== "string" ||
+    symbolValue.length === 0 ||
+    supply === undefined ||
+    createdAt === undefined ||
+    typeof activeValue !== "boolean"
+  ) {
+    return undefined;
+  }
+  return {
+    id: index,
+    token,
+    pair,
+    creator,
+    name: nameValue,
+    symbol: symbolValue,
+    supply,
+    createdAt,
+    active: activeValue,
+  };
+}
+
 export function parseLaunches(data: unknown): LaunchRow[] {
   if (!Array.isArray(data)) return [];
   const rows: LaunchRow[] = [];
   data.forEach((item, index) => {
-    if (!item || typeof item !== "object") return;
-    const record = item as Record<string, unknown>;
-    if (
-      typeof record.token !== "string" ||
-      typeof record.pair !== "string" ||
-      typeof record.creator !== "string" ||
-      typeof record.name !== "string" ||
-      typeof record.symbol !== "string" ||
-      typeof record.supply !== "bigint" ||
-      typeof record.createdAt !== "bigint" ||
-      typeof record.active !== "boolean"
-    ) {
-      return;
-    }
-    rows.push({
-      id: index,
-      token: record.token as `0x${string}`,
-      pair: record.pair as `0x${string}`,
-      creator: record.creator as `0x${string}`,
-      name: record.name,
-      symbol: record.symbol,
-      supply: record.supply,
-      createdAt: record.createdAt,
-      active: record.active,
-    });
+    const row = parseLaunch(item, index);
+    if (row) rows.push(row);
   });
   return rows;
 }
@@ -122,4 +156,73 @@ export function liveChange(price: bigint, mark: bigint, previous: bigint, stored
   if (mark > 0n && price !== mark) return changeBps(price, mark);
   if (previous > 0n && previous !== price) return changeBps(price, previous);
   return 0;
+}
+
+/** NIX per token, scaled by 1e18. Same formula as `NixPair._updateMark`. */
+export function spotFromReserves(reserveNix: bigint, reserveToken: bigint) {
+  if (reserveNix <= 0n || reserveToken <= 0n) return 0n;
+  return (reserveNix * 10n ** 18n) / reserveToken;
+}
+
+/** Prefer the pair's stored reserve, then the tokens actually held by the pair. */
+export function liveReserve(stored: bigint | undefined, balance: bigint | undefined) {
+  if (stored === undefined && balance === undefined) return undefined;
+  if (stored !== undefined && stored > 0n) return stored;
+  if (balance !== undefined && balance > 0n) return balance;
+  return stored ?? balance ?? 0n;
+}
+
+export function liveSpot(
+  storedPrice: bigint | undefined,
+  reserveNix: bigint | undefined,
+  reserveToken: bigint | undefined,
+) {
+  if (reserveNix !== undefined && reserveToken !== undefined && reserveNix > 0n && reserveToken > 0n) {
+    return spotFromReserves(reserveNix, reserveToken);
+  }
+  return storedPrice;
+}
+
+export type CallResult = {
+  status?: "success" | "failure";
+  result?: unknown;
+};
+
+export type MarketFigures =
+  | { ready: false; failed: boolean }
+  | {
+      ready: true;
+      reserveNix: bigint;
+      reserveToken: bigint;
+      price: bigint;
+      change: number | null;
+      volume24h: bigint | undefined;
+    };
+
+const MARKET_CALLS = 9;
+
+export function figuresFromCalls(calls: readonly CallResult[] | undefined): MarketFigures {
+  if (!calls || calls.length < MARKET_CALLS) return { ready: false, failed: false };
+  const at = (index: number) => {
+    const call = calls[index];
+    if (!call || call.status === "failure") return undefined;
+    return typeof call.result === "bigint" ? call.result : undefined;
+  };
+  const failed = calls.some((call) => call?.status === "failure");
+  const reserveNix = liveReserve(at(0), at(7));
+  const reserveToken = liveReserve(at(1), at(8));
+  const price = liveSpot(at(2), reserveNix, reserveToken);
+  if (reserveNix === undefined || reserveToken === undefined || price === undefined) {
+    return { ready: false, failed };
+  }
+  const mark = at(3) ?? 0n;
+  const previous = at(4) ?? 0n;
+  return {
+    ready: true,
+    reserveNix,
+    reserveToken,
+    price,
+    change: price > 0n ? liveChange(price, mark, previous, null) : null,
+    volume24h: at(5),
+  };
 }

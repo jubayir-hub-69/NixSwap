@@ -10,6 +10,28 @@ export function deploymentFor(chainId: number | undefined) {
 
 export const deployedChains = Object.values(deployments);
 
+/** Wagmi lists Arbitrum Sepolia first. Deployment JSON object order is not the app default. */
+export const preferredChainId = 421614;
+
+export const liveReadQuery = {
+  refetchInterval: 8_000,
+  refetchOnWindowFocus: true,
+  structuralSharing: false,
+} as const;
+
+export function readChainId(accountChainId: number | undefined, fallbackChainId: number) {
+  return accountChainId ?? fallbackChainId;
+}
+
+export function errorText(error: unknown) {
+  if (error && typeof error === "object" && "shortMessage" in error) {
+    const shortMessage = error.shortMessage;
+    if (typeof shortMessage === "string" && shortMessage.length > 0) return shortMessage;
+  }
+  if (error instanceof Error && error.message) return error.message;
+  return "Contract read failed.";
+}
+
 export function optionalAddress(record: object | undefined, key: string): `0x${string}` | undefined {
   if (!record || !(key in record)) return undefined;
   const value = (record as Record<string, unknown>)[key];

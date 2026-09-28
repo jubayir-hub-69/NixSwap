@@ -1,38 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo } from "react";
-import { useReadContracts } from "wagmi";
-import { abis } from "@/config/contracts";
 import { useLaunches } from "@/hooks/useLaunches";
+import { useMarketQuotes } from "@/hooks/useMarketQuotes";
 import { formatUnits } from "@/lib/amount";
-import { formatChange, formatPrice, liveChange, shortAddress, type LaunchRow } from "@/lib/markets";
+import { errorText } from "@/lib/deployment";
+import { formatChange, formatPrice, shortAddress, type LaunchRow, type MarketFigures } from "@/lib/markets";
 
-const fields = [
-  "reserveNix",
-  "reserveToken",
-  "priceX18",
-  "markPriceX18",
-  "previousPriceX18",
-  "volumeWindowNix",
-  "volumeNix",
-] as const;
+type Quote = LaunchRow & MarketFigures;
 
-type Quote = {
-  launch: LaunchRow;
-  reserveNix: bigint;
-  reserveToken: bigint;
-  price: bigint;
-  mark: bigint;
-  previous: bigint;
-  volume: bigint;
-  cumulative: bigint;
-  change: number;
-  volume24h: bigint;
-};
+function priceLabel(row: Quote) {
+  if (!row.ready) return row.failed ? "Unavailable" : "Reading…";
+  return formatPrice(row.price);
+}
 
-function bigintAt(value: unknown) {
-  return typeof value === "bigint" ? value : 0n;
+function reserveLabel(row: Quote, value: bigint | undefined) {
+  if (!row.ready) return row.failed ? "Unavailable" : "Reading…";
+  return formatUnits(value ?? 0n, 18, 2);
 }
 
 function StatCard({ title, rows }: { title: string; rows: Quote[] }) {
@@ -43,16 +27,16 @@ function StatCard({ title, rows }: { title: string; rows: Quote[] }) {
         {rows.length === 0 ? <p className="text-xs text-mist">No priced markets yet.</p> : null}
         {rows.map((row) => (
           <Link
-            key={row.launch.token}
-            href={`/pool?token=${row.launch.token}`}
+            key={row.token}
+            href={`/pool?token=${row.token}`}
             className="flex items-center justify-between gap-3 rounded-2xl px-2 py-2 hover:bg-white/5"
           >
             <span>
-              <span className="block text-sm text-frost">{row.launch.symbol}</span>
-              <span className="block text-[11px] text-mist">{formatPrice(row.price)}</span>
+              <span className="block text-sm text-frost">{row.symbol}</span>
+              <span className="block text-[11px] text-mist">{priceLabel(row)}</span>
             </span>
-            <span className={row.change > 0 ? "text-emerald-300" : row.change < 0 ? "text-rose-300" : "text-mist"}>
-              {formatChange(row.change)}
+            <span className={row.ready && row.change !== null && row.change > 0 ? "text-emerald-300" : row.ready && row.change !== null && row.change < 0 ? "text-rose-300" : "text-mist"}>
+              {row.ready && row.change !== null ? formatChange(row.change) : "—"}
             </span>
           </Link>
         ))}
@@ -63,51 +47,25 @@ function StatCard({ title, rows }: { title: string; rows: Quote[] }) {
 
 export function MarketsBoard() {
   const launches = useLaunches();
-  const chainId = launches.chainId;
-  const contracts = launches.rows.flatMap((launch) =>
-    fields.map((functionName) => ({
-      address: launch.pair,
-      abi: abis.NixPair,
-      functionName,
-      chainId,
-    })),
-  );
-  const reads = useReadContracts({
-    contracts,
-    query: { enabled: launches.rows.length > 0 },
-  });
-  const baseRows = useMemo(() => {
-    return launches.rows.map((launch, index) => {
-      const slice = reads.data?.slice(index * fields.length, (index + 1) * fields.length) ?? [];
-      const at = (offset: number) => bigintAt(slice[offset]?.result);
-      return {
-        launch,
-        reserveNix: at(0),
-        reserveToken: at(1),
-        price: at(2),
-        mark: at(3),
-        previous: at(4),
-        volume: at(5),
-        cumulative: at(6),
-      };
-    });
-  }, [launches.rows, reads.data]);
-
-  const quotes: Quote[] = baseRows.map((row) => ({
-    ...row,
-    change: liveChange(row.price, row.mark, row.previous, null),
-    volume24h: row.volume,
-  }));
-  const priced = quotes.filter((row) => row.price > 0n);
-  const gainers = [...priced].sort((left, right) => right.change - left.change).slice(0, 5);
-  const losers = [...priced].sort((left, right) => left.change - right.change).slice(0, 5);
-  const trending = [...quotes]
+  const quoted = useMarketQuotes(launches.rows, launches.chainId, launches.deployment?.NixToken);
+  const quotes: Quote[] = quoted.quotes;
+  const priced = quotes.filter((row): row is Quote & { ready: true } => row.ready && row.price > 0n);
+  const gainers = [...priced].sort((left, right) => (right.change ?? 0) - (left.change ?? 0)).slice(0, 5);
+  const losers = [...priced].sort((left, right) => (left.change ?? 0) - (right.change ?? 0)).slice(0, 5);
+  const trending = quotes
+    .filter((row): row is Quote & { ready: true } => row.ready)
     .sort((left, right) => {
-      if (left.volume24h === right.volume24h) return left.reserveNix > right.reserveNix ? -1 : 1;
-      return left.volume24h > right.volume24h ? -1 : 1;
+      const leftVolume = left.volume24h ?? 0n;
+      const rightVolume = right.volume24h ?? 0n;
+      if (leftVolume === rightVolume) return left.reserveNix > right.reserveNix ? -1 : 1;
+      return leftVolume > rightVolume ? -1 : 1;
     })
     .slice(0, 5);
-  const totalVolume = quotes.reduce((sum, row) => sum + row.volume24h, 0n);
+  const readyVolumes = quotes.filter((row) => row.ready);
+  const totalVolume =
+    readyVolumes.length === 0
+      ? undefined
+      : readyVolumes.reduce((sum, row) => sum + (row.volume24h ?? 0n), 0n);
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4 px-4 py-10 sm:py-14">
@@ -121,7 +79,9 @@ export function MarketsBoard() {
           </div>
           <p className="text-sm text-mist" data-testid="market-volume">
             24h NIX volume{" "}
-            <span className="text-frost">{formatUnits(totalVolume, 18, 2)}</span>
+            <span className="text-frost">
+              {totalVolume === undefined ? "Reading…" : formatUnits(totalVolume, 18, 2)}
+            </span>
           </p>
         </div>
         <p className="mt-3 max-w-3xl text-xs leading-5 text-mist">
@@ -131,18 +91,23 @@ export function MarketsBoard() {
         </p>
       </section>
 
-      {!launches.launchpad ? (
+      {!launches.launchpad && !launches.loading ? (
         <section className="glass-panel rounded-[28px] p-5 text-sm text-mist">
           This network does not have the launchpad yet. Deploy NixLaunchpad, then the token list will load from the contract.
         </section>
-      ) : launches.loading ? (
+      ) : launches.loading && quotes.length === 0 ? (
         <section className="glass-panel rounded-[28px] p-5 text-sm text-mist">Reading launches…</section>
+      ) : launches.error && quotes.length === 0 ? (
+        <section className="glass-panel rounded-[28px] p-5 text-sm text-rose-300">{errorText(launches.error)}</section>
       ) : quotes.length === 0 ? (
         <section className="glass-panel rounded-[28px] p-5 text-sm text-mist">
           No tokens have been launched on this network.
         </section>
       ) : (
         <>
+          {quoted.error ? (
+            <p className="text-sm text-rose-300">{errorText(quoted.error)}</p>
+          ) : null}
           <div className="grid gap-4 md:grid-cols-3">
             <StatCard title="Top gainers" rows={gainers} />
             <StatCard title="Top losers" rows={losers} />
@@ -162,22 +127,24 @@ export function MarketsBoard() {
               </thead>
               <tbody>
                 {quotes.map((row) => (
-                  <tr key={row.launch.token} className="border-t border-white/5">
+                  <tr key={row.token} className="border-t border-white/5">
                     <td className="px-3 py-3">
-                      <Link href={`/pool?token=${row.launch.token}`} className="text-frost hover:text-cyan-glow">
-                        {row.launch.symbol}
+                      <Link href={`/pool?token=${row.token}`} className="text-frost hover:text-cyan-glow">
+                        {row.symbol}
                       </Link>
                       <span className="mt-0.5 block text-[11px] text-mist">
-                        {row.launch.name} · {shortAddress(row.launch.token)}
+                        {row.name} · {shortAddress(row.token)}
                       </span>
                     </td>
-                    <td className="px-3 py-3 text-frost">{formatPrice(row.price)}</td>
-                    <td className={`px-3 py-3 ${row.change > 0 ? "text-emerald-300" : row.change < 0 ? "text-rose-300" : "text-mist"}`}>
-                      {formatChange(row.change)}
+                    <td className="px-3 py-3 text-frost">{priceLabel(row)}</td>
+                    <td className={`px-3 py-3 ${row.ready && row.change !== null && row.change > 0 ? "text-emerald-300" : row.ready && row.change !== null && row.change < 0 ? "text-rose-300" : "text-mist"}`}>
+                      {row.ready && row.change !== null ? formatChange(row.change) : "—"}
                     </td>
-                    <td className="px-3 py-3 text-frost">{formatUnits(row.volume24h, 18, 2)}</td>
-                    <td className="px-3 py-3 text-frost">{formatUnits(row.reserveNix, 18, 2)}</td>
-                    <td className="px-3 py-3 text-frost">{formatUnits(row.reserveToken, 18, 2)}</td>
+                    <td className="px-3 py-3 text-frost">
+                      {row.ready ? (row.volume24h === undefined ? "—" : formatUnits(row.volume24h, 18, 2)) : row.failed ? "Unavailable" : "Reading…"}
+                    </td>
+                    <td className="px-3 py-3 text-frost">{reserveLabel(row, row.ready ? row.reserveNix : undefined)}</td>
+                    <td className="px-3 py-3 text-frost">{reserveLabel(row, row.ready ? row.reserveToken : undefined)}</td>
                   </tr>
                 ))}
               </tbody>
