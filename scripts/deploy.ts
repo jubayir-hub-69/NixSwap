@@ -97,6 +97,11 @@ async function main() {
   nonce = await settledNonce(deployer.address);
   console.log(`Deploying from ${deployer.address} at nonce ${nonce} with ${confirmations} confirmation(s).`);
 
+  if (process.env.REPLACE_SWAP === "1") {
+    await replaceSwap(chainId, networkName);
+    return;
+  }
+
   if (process.env.REPLACE_LAUNCHPAD === "1") {
     await replaceLaunchpad(chainId, networkName);
     return;
@@ -201,6 +206,28 @@ async function fundLaunchSeed(token: SeedToken, launchpad: SeedLaunchpad) {
   await send(token.approve(launchpadAddress, budget, await overrides()));
   await send(launchpad.fundSeed(budget, await overrides()));
   console.log(`Funded ${launchpadAddress} with ${budget} NIX (${launches} opening pools).`);
+}
+
+async function replaceSwap(chainId: number, networkName: string) {
+  const jsonPath = path.join(process.cwd(), "frontend", "config", "deployments.json");
+  const deployments = loadDeployments(jsonPath);
+  const existing = deployments[String(chainId)];
+  if (!existing?.NixToken) {
+    throw new Error(`No NixToken is saved for chain ${chainId}.`);
+  }
+  const token = await hre.ethers.getContractAt("NixToken", existing.NixToken, deployer);
+  const registry = await deployFresh("IntentRegistry", [deployer.address]);
+  await send(registry.setSolver(deployer.address, true, await overrides()));
+  const launchpad = await deployFresh("NixLaunchpad", [existing.NixToken]);
+  await fundLaunchSeed(token, launchpad);
+  existing.IntentRegistry = await registry.getAddress();
+  existing.NixLaunchpad = await launchpad.getAddress();
+  existing.network = networkName;
+  existing.deployer = deployer.address;
+  await writeFrontendConfig({ [String(chainId)]: existing });
+  console.log(`Replaced IntentRegistry on ${networkName}: ${existing.IntentRegistry}`);
+  console.log(`Replaced NixLaunchpad on ${networkName}: ${existing.NixLaunchpad}`);
+  console.log(`Solver whitelisted: ${deployer.address}`);
 }
 
 async function replaceLaunchpad(chainId: number, networkName: string) {

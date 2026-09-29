@@ -6,10 +6,9 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @title NixPair
-/// @notice Public NIX/token reserves used for AMM pricing.
-/// @dev Liquidity deposits and withdrawals are public, so the pool price is public.
-///      Swap size and limit price are not accepted here. Traders encrypt those values
-///      and submit them to IntentRegistry.
+/// @notice Public NIX/token reserves used for AMM pricing and settlement.
+/// @dev Reserves and the spot price are public. Traders encrypt the order size and the
+///      minimum received amount, and IntentRegistry reveals them only when the solver fills.
 contract NixPair {
     using SafeERC20 for IERC20;
 
@@ -50,8 +49,18 @@ contract NixPair {
         uint256 shares,
         uint256 priceX18
     );
+    event Swap(
+        address indexed sender,
+        address indexed recipient,
+        address indexed tokenIn,
+        uint256 amountIn,
+        uint256 amountOut,
+        uint256 priceX18
+    );
 
     error ZeroAmount();
+    error UnknownToken(address token);
+    error InsufficientOutput(uint256 output, uint256 minimum);
     error InsufficientShares(uint256 requested, uint256 available);
 
     constructor(IERC20 nix_, IERC20 token_) {
@@ -97,6 +106,38 @@ contract NixPair {
         emit LiquidityRemoved(msg.sender, nixOut, tokenOut, shares, priceX18);
     }
 
+    /// @notice Constant-product output for selling `amountIn` of `tokenIn`.
+    function quoteSwap(address tokenIn, uint256 amountIn) external view returns (uint256 amountOut) {
+        return _swapped(tokenIn, amountIn);
+    }
+
+    /// @notice Sells `tokenIn` for the other reserve asset and pays `recipient`.
+    ///         `minOut` is enforced against the public reserves at execution.
+    function swap(address tokenIn, uint256 amountIn, uint256 minOut, address recipient)
+        external
+        returns (uint256 amountOut)
+    {
+        if (recipient == address(0)) revert ZeroAmount();
+        amountOut = _swapped(tokenIn, amountIn);
+        if (amountOut < minOut) revert InsufficientOutput(amountOut, minOut);
+
+        IERC20 input = IERC20(tokenIn);
+        bool nixIn = tokenIn == address(nix);
+        IERC20 output = nixIn ? token : nix;
+        input.safeTransferFrom(msg.sender, address(this), amountIn);
+        if (nixIn) {
+            reserveNix += amountIn;
+            reserveToken -= amountOut;
+        } else {
+            reserveToken += amountIn;
+            reserveNix -= amountOut;
+        }
+        _updateMark(nixIn ? amountIn : amountOut);
+        output.safeTransfer(recipient, amountOut);
+
+        emit Swap(msg.sender, recipient, tokenIn, amountIn, amountOut, priceX18);
+    }
+
     /// @notice Preview of `addLiquidity` using the public reserves. Deposit amounts are public.
     function quoteAdd(uint256 nixAmount, uint256 tokenAmount)
         external
@@ -125,6 +166,16 @@ contract NixPair {
         nixUsed = shares * reserveNix / totalLiquidity;
         tokenUsed = shares * reserveToken / totalLiquidity;
         if (nixUsed == 0 || tokenUsed == 0) revert ZeroAmount();
+    }
+
+    function _swapped(address tokenIn, uint256 amountIn) internal view returns (uint256 amountOut) {
+        bool nixIn = tokenIn == address(nix);
+        if (!nixIn && tokenIn != address(token)) revert UnknownToken(tokenIn);
+        uint256 reserveIn = nixIn ? reserveNix : reserveToken;
+        uint256 reserveOut = nixIn ? reserveToken : reserveNix;
+        if (amountIn == 0 || reserveIn == 0 || reserveOut == 0) revert ZeroAmount();
+        amountOut = reserveOut * amountIn / (reserveIn + amountIn);
+        if (amountOut == 0) revert ZeroAmount();
     }
 
     function _updateMark(uint256 nixVolume) internal {

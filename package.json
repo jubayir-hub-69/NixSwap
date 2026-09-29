@@ -4,7 +4,8 @@
   "description": "",
   "scripts": {
     "test": "hardhat test",
-    "deploy": "hardhat run scripts/deploy.ts"
+    "deploy": "hardhat run scripts/deploy.ts",
+    "solve": "hardhat run scripts/solver.ts"
   },
   "keywords": [],
   "author": "",

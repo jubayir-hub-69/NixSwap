@@ -1394,6 +1394,17 @@ export const abis = {
     {
       "inputs": [
         {
+          "internalType": "uint256",
+          "name": "intentId",
+          "type": "uint256"
+        }
+      ],
+      "name": "IntentNotSwap",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
           "internalType": "uint64",
           "name": "expiresAt",
           "type": "uint64"
@@ -1403,8 +1414,35 @@ export const abis = {
       "type": "error"
     },
     {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "handle",
+          "type": "bytes32"
+        }
+      ],
+      "name": "InvalidDecryptionProof",
+      "type": "error"
+    },
+    {
       "inputs": [],
       "name": "InvalidRoute",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "output",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "minimum",
+          "type": "uint256"
+        }
+      ],
+      "name": "LimitNotMet",
       "type": "error"
     },
     {
@@ -1427,6 +1465,28 @@ export const abis = {
         }
       ],
       "name": "OwnableUnauthorizedAccount",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "pair",
+          "type": "address"
+        }
+      ],
+      "name": "RouteMismatch",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "token",
+          "type": "address"
+        }
+      ],
+      "name": "SafeERC20FailedOperation",
       "type": "error"
     },
     {
@@ -1465,6 +1525,22 @@ export const abis = {
         }
       ],
       "name": "SolverNotWhitelisted",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "targetChain",
+          "type": "uint32"
+        }
+      ],
+      "name": "WrongChain",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "ZeroFill",
       "type": "error"
     },
     {
@@ -1571,6 +1647,49 @@ export const abis = {
           "type": "uint256"
         },
         {
+          "indexed": true,
+          "internalType": "address",
+          "name": "user",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "tokenIn",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "tokenOut",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "amountIn",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "amountOut",
+          "type": "uint256"
+        }
+      ],
+      "name": "SwapFilled",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "uint256",
+          "name": "intentId",
+          "type": "uint256"
+        },
+        {
           "indexed": false,
           "internalType": "address",
           "name": "tokenIn",
@@ -1588,6 +1707,19 @@ export const abis = {
     },
     {
       "inputs": [],
+      "name": "CONFIDENTIAL_TO_PUBLIC",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
       "name": "MAX_WINDOW",
       "outputs": [
         {
@@ -1597,6 +1729,67 @@ export const abis = {
         }
       ],
       "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "components": [
+            {
+              "internalType": "uint256",
+              "name": "intentId",
+              "type": "uint256"
+            },
+            {
+              "internalType": "address",
+              "name": "pair",
+              "type": "address"
+            },
+            {
+              "internalType": "uint64",
+              "name": "amount",
+              "type": "uint64"
+            },
+            {
+              "internalType": "uint64",
+              "name": "limit",
+              "type": "uint64"
+            },
+            {
+              "internalType": "uint32",
+              "name": "targetChain",
+              "type": "uint32"
+            }
+          ],
+          "internalType": "struct IntentRegistry.SwapCleartext",
+          "name": "order",
+          "type": "tuple"
+        },
+        {
+          "internalType": "bytes",
+          "name": "amountProof",
+          "type": "bytes"
+        },
+        {
+          "internalType": "bytes",
+          "name": "limitProof",
+          "type": "bytes"
+        },
+        {
+          "internalType": "bytes",
+          "name": "chainProof",
+          "type": "bytes"
+        }
+      ],
+      "name": "fillSwap",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "amountOut",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable",
       "type": "function"
     },
     {
@@ -3449,6 +3642,22 @@ export const abis = {
       "inputs": [
         {
           "internalType": "uint256",
+          "name": "output",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "minimum",
+          "type": "uint256"
+        }
+      ],
+      "name": "InsufficientOutput",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
           "name": "requested",
           "type": "uint256"
         },
@@ -3470,6 +3679,17 @@ export const abis = {
         }
       ],
       "name": "SafeERC20FailedOperation",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "token",
+          "type": "address"
+        }
+      ],
+      "name": "UnknownToken",
       "type": "error"
     },
     {
@@ -3549,6 +3769,49 @@ export const abis = {
         }
       ],
       "name": "LiquidityRemoved",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "sender",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "recipient",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "tokenIn",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "amountIn",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "amountOut",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "priceX18",
+          "type": "uint256"
+        }
+      ],
+      "name": "Swap",
       "type": "event"
     },
     {
@@ -3735,6 +3998,30 @@ export const abis = {
     {
       "inputs": [
         {
+          "internalType": "address",
+          "name": "tokenIn",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "amountIn",
+          "type": "uint256"
+        }
+      ],
+      "name": "quoteSwap",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "amountOut",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
           "internalType": "uint256",
           "name": "shares",
           "type": "uint256"
@@ -3780,6 +4067,40 @@ export const abis = {
         }
       ],
       "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "tokenIn",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "amountIn",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "minOut",
+          "type": "uint256"
+        },
+        {
+          "internalType": "address",
+          "name": "recipient",
+          "type": "address"
+        }
+      ],
+      "name": "swap",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "amountOut",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable",
       "type": "function"
     },
     {
@@ -4207,29 +4528,29 @@ export const deployments = {
     "network": "Base Sepolia",
     "deployer": "0x9AFe5CeF11fC10756faef213f7A30D9873B5d372",
     "NixToken": "0x3FfcBFb90DBc92994643415838d4177cf2b64b78",
-    "IntentRegistry": "0xC8F58962dfb5032aE50BEF5bEFf2e1a7886960BA",
+    "IntentRegistry": "0x444CC59294421CAf78cc40fb92691b3657F0cAE6",
     "NixPool": "0xDd2BfD7A8D5E29dCcBc37f69F520A74Bd9d461b1",
     "NixLaunch": "0xb0575745DDd4c43D70F9d8a890aF52bE047b408b",
-    "NixLaunchpad": "0x8cf2152c960BE67e0654bd3Bc702be30728501a4"
+    "NixLaunchpad": "0x1826f4165e8Bc2363aeaDfA022be927266b36b1c"
   },
   "421614": {
     "chainId": 421614,
     "network": "Arbitrum Sepolia",
     "deployer": "0x9AFe5CeF11fC10756faef213f7A30D9873B5d372",
     "NixToken": "0xfE128bCc8F4D45AB9E24bF446EEa8302d1FD4CB7",
-    "IntentRegistry": "0x444CC59294421CAf78cc40fb92691b3657F0cAE6",
+    "IntentRegistry": "0x838491A2108457b7F895C70548061776F97995D7",
     "NixPool": "0x1826f4165e8Bc2363aeaDfA022be927266b36b1c",
     "NixLaunch": "0x9e39A7e03a34B363debcd12F3472BD3e9eb82336",
-    "NixLaunchpad": "0xBbc7C81C07C9E75960aDAb5F6Ee94e639C24832b"
+    "NixLaunchpad": "0x1eE34364c2eF66192B7daBD6219E7fb03620FEBD"
   },
   "11155111": {
     "chainId": 11155111,
     "network": "Ethereum Sepolia",
     "deployer": "0x9AFe5CeF11fC10756faef213f7A30D9873B5d372",
     "NixToken": "0xb0575745DDd4c43D70F9d8a890aF52bE047b408b",
-    "IntentRegistry": "0x83bE89bFEb39281c2a4ef080450A38988002108D",
+    "IntentRegistry": "0xBbc7C81C07C9E75960aDAb5F6Ee94e639C24832b",
     "NixPool": "0x1A85147a0b372A56A2C93515E44d99d062264c54",
     "NixLaunch": "0xfE128bCc8F4D45AB9E24bF446EEa8302d1FD4CB7",
-    "NixLaunchpad": "0x77e46702C82f16D6227686e0ED8882c3cf44e599"
+    "NixLaunchpad": "0x9B34f87d3B9549810ABaF7822A9aCc908f424585"
   }
 } as const;

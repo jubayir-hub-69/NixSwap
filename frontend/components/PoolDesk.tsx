@@ -105,11 +105,22 @@ export function PoolDesk() {
   const nixAllowed = asBigint(nixAllowance.data);
   const tokenAllowed = asBigint(tokenAllowance.data);
   const allowanceLoading = Boolean(quoted && (nixAllowance.isLoading || tokenAllowance.isLoading));
+  const balanceKnown = walletNix.value !== undefined && walletToken.value !== undefined;
+  const balanceProblem = Boolean(address && quoted && (walletNix.error || walletToken.error));
+  const balanceLoading = Boolean(address && quoted && !balanceKnown && !balanceProblem);
+  const shortNix = Boolean(quoted && walletNix.value !== undefined && quoted.nix > walletNix.value);
+  const shortToken = Boolean(quoted && walletToken.value !== undefined && quoted.token > walletToken.value);
   const needsNix = Boolean(
-    quoted && (nixAllowance.isError || (nixAllowance.isSuccess && (nixAllowed ?? 0n) < quoted.nix)),
+    quoted &&
+      !shortNix &&
+      !shortToken &&
+      (nixAllowance.isError || (nixAllowance.isSuccess && (nixAllowed ?? 0n) < quoted.nix)),
   );
   const needsToken = Boolean(
-    quoted && (tokenAllowance.isError || (tokenAllowance.isSuccess && (tokenAllowed ?? 0n) < quoted.token)),
+    quoted &&
+      !shortNix &&
+      !shortToken &&
+      (tokenAllowance.isError || (tokenAllowance.isSuccess && (tokenAllowed ?? 0n) < quoted.token)),
   );
   const shownNix = liveReserve(storedNix, pairNixBalance.value);
   const shownToken = liveReserve(storedToken, pairTokenBalance.value);
@@ -210,6 +221,10 @@ export function PoolDesk() {
   else if (!active) depositLabel = "No launched token";
   else if (!reservesReady) depositLabel = "Reading pool…";
   else if (!quoted) depositLabel = "Enter both amounts";
+  else if (balanceLoading) depositLabel = "Reading balances…";
+  else if (balanceProblem) depositLabel = "Balances unavailable";
+  else if (shortNix) depositLabel = "Not enough NIX";
+  else if (shortToken) depositLabel = `Not enough ${active.symbol}`;
   else if (allowanceLoading) depositLabel = "Reading allowances…";
   else if (needsNix) depositLabel = "Approve NIX";
   else if (needsToken) depositLabel = `Approve ${active.symbol}`;
@@ -218,7 +233,10 @@ export function PoolDesk() {
     <main className="mx-auto flex w-full max-w-xl flex-1 flex-col gap-4 px-4 py-10 sm:py-14">
       <section className="glass-panel rounded-[28px] p-5">
         <h1 className="text-lg font-semibold tracking-tight">Pool</h1>
-        <p className="mt-1 text-xs text-mist">Public reserves price the pool. Swap amounts stay encrypted on the Swap page.</p>
+        <p className="mt-1 text-xs text-mist">
+          A launch opens the pool itself. Opening liquidity stays in the pool. This page adds a further deposit, or
+          withdraws shares from a deposit you added.
+        </p>
         {launches.loading && launches.rows.length === 0 ? (
           <p className="mt-4 text-sm text-mist">Reading launches…</p>
         ) : !launches.launchpad ? (
@@ -274,7 +292,7 @@ export function PoolDesk() {
               event.preventDefault();
               if (!isConnected) openConnectModal?.();
               else if (!deployment || !walletChainId) switchChain({ chainId: preferredChainId });
-              else if (allowanceLoading || !quoted) return;
+              else if (balanceLoading || balanceProblem || shortNix || shortToken || allowanceLoading || !quoted) return;
               else if (needsNix) void approve(deployment.NixToken, quoted.nix);
               else if (needsToken) void approve(active.token, quoted.token);
               else void deposit();
@@ -323,20 +341,27 @@ export function PoolDesk() {
             {quoted ? (
               <p className="text-xs text-mist">
                 The pool will pull {formatUnits(quoted.nix, 18)} NIX and {formatUnits(quoted.token, 18)} {active.symbol}.
-                {needsNix
-                  ? " Approve NIX, then approve the token. Reserves update after both approvals and Add liquidity."
-                  : needsToken
-                    ? " NIX is approved. Approve the token next, then add liquidity."
-                    : allowanceLoading
-                      ? ""
-                      : " Both tokens are approved."}
+                {shortNix
+                  ? ` This wallet holds ${formatUnits(walletNix.value ?? 0n, 18)} NIX.`
+                  : shortToken
+                    ? ` This wallet holds ${formatUnits(walletToken.value ?? 0n, 18)} ${active.symbol}.`
+                    : needsNix
+                      ? " Approve NIX, then approve the token. Reserves update after both approvals and Add liquidity."
+                      : needsToken
+                        ? " NIX is approved. Approve the token next, then add liquidity."
+                        : allowanceLoading || balanceLoading
+                          ? ""
+                          : " Both tokens are approved."}
               </p>
             ) : null}
             <button
               type="submit"
               data-testid="deposit-action"
               aria-busy={action === "deposit" && tx.pending}
-              disabled={Boolean(isConnected && deployment) && (busy || !quoted || allowanceLoading)}
+              disabled={
+                Boolean(isConnected && deployment) &&
+                (busy || !quoted || allowanceLoading || balanceLoading || balanceProblem || shortNix || shortToken)
+              }
               className="min-h-12 w-full rounded-2xl bg-cyan-glow px-4 py-3 text-sm font-semibold text-void disabled:opacity-40"
             >
               <TxButtonContent pending={action === "deposit" && tx.pending} phase={tx.phase} idle={depositLabel} />

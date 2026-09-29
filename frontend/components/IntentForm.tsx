@@ -15,7 +15,7 @@ import { useLaunches } from "@/hooks/useLaunches";
 import { useMarketQuotes } from "@/hooks/useMarketQuotes";
 import { asBigint, asNumber, decimalInput, formatBalance, formatUnits, parseUnits } from "@/lib/amount";
 import { deployedChains, preferredChainId } from "@/lib/deployment";
-import { formatPrice, nixPairFor } from "@/lib/markets";
+import { formatPrice, nixPairFor, quoteSwap } from "@/lib/markets";
 
 const fieldClass =
   "w-full bg-transparent text-2xl font-medium tracking-tight text-frost outline-none placeholder:text-white/20 sm:text-3xl";
@@ -134,13 +134,19 @@ export function IntentForm({
   const allowed = asBigint(allowance.data);
   const needsApproval = Boolean(publicAmount && publicAmount > 0n && (allowed === undefined || allowed < publicAmount));
   const isOwner = Boolean(address && owner.data && address.toLowerCase() === String(owner.data).toLowerCase());
-  const spotPrice = quote?.ready ? quote.price : undefined;
-  const estimate =
-    publicAmount && spotPrice && spotPrice > 0n
-      ? sellingNix
-        ? (publicAmount * 10n ** 18n) / spotPrice
-        : (publicAmount * spotPrice) / 10n ** 18n
-      : undefined;
+  const publicLimit = parseUnits(limit, places);
+  const poolOut =
+    quote?.ready && publicAmount && publicAmount > 0n
+      ? quoteSwap(
+          publicAmount,
+          sellingNix ? quote.reserveNix : quote.reserveToken,
+          sellingNix ? quote.reserveToken : quote.reserveNix,
+        )
+      : null;
+  const abovePool = Boolean(poolOut && publicLimit && publicLimit > poolOut);
+  const shortPay = Boolean(
+    publicAmount && publicAmount > 0n && payBalance.value !== undefined && publicAmount > payBalance.value,
+  );
   const routeReady = Boolean(tokenInAddress && tokenOutAddress && tokenInAddress.toLowerCase() !== tokenOutAddress.toLowerCase());
   const busy = tx.pending || switching;
 
@@ -247,10 +253,13 @@ export function IntentForm({
   else if (!deployment || !targetChain) label = switching ? "Switching network…" : "Switch network";
   else if (maxWindow.isLoading || allowance.isLoading) label = "Reading contracts…";
   else if (!routeReady) label = "Choose two tokens";
-  else if (!amount || !limit) label = "Enter amount and limit";
+  else if (!amount || !limit) label = "Enter amount and minimum";
   else if (amountRaw === null || limitRaw === null || amountRaw === 0n || limitRaw === 0n || publicAmount === null) {
     label = "Check the amounts";
-  } else if (needsApproval) label = "Approve Token";
+  } else if (payBalance.loading) label = "Reading balance…";
+  else if (payBalance.error) label = "Balance unavailable";
+  else if (shortPay) label = `Not enough ${payToken?.symbol ?? "tokens"}`;
+  else if (needsApproval) label = "Approve Token";
   else if (!solverAddress) label = "Enter a solver address";
   else if (solverAllowed.isLoading) label = "Checking solver…";
   else if (solverAllowed.data === false) label = "Solver is not whitelisted";
@@ -276,7 +285,10 @@ export function IntentForm({
         publicAmount &&
         expiryOk &&
         solverAllowed.data === true &&
-        !needsApproval,
+        !needsApproval &&
+        !shortPay &&
+        !payBalance.loading &&
+        !payBalance.error,
     ) && !busy;
 
   return (
@@ -351,11 +363,16 @@ export function IntentForm({
                   ? "Pool price unavailable."
                   : "Pool price Reading…"
                 : `Pool price ${formatPrice(quote.price)}`}
-            {estimate !== undefined ? ` · Local estimate ${formatUnits(estimate, places)}` : ""}
+            {poolOut ? ` · Pool pays ${formatUnits(poolOut, receiveBalance.decimals)} ${receiveToken?.symbol ?? ""}` : ""}
           </p>
+          {abovePool ? (
+            <p className="text-xs text-rose-300" data-testid="limit-warning">
+              This minimum is above the pool payout, so the solver leaves the order open.
+            </p>
+          ) : null}
           <label className="field-well block rounded-3xl px-4 py-3">
             <span className="mb-1 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-xs text-mist">
-              <span>Amount (encrypted, {CONFIDENTIAL_DECIMALS} decimals)</span>
+              <span>You pay</span>
               <span data-testid="pay-balance">{tokenBalance(payToken?.symbol, payBalance)}</span>
             </span>
             <input
@@ -364,7 +381,7 @@ export function IntentForm({
               inputMode="decimal"
               autoComplete="off"
               placeholder="0"
-              aria-label="Amount"
+              aria-label="You pay"
               onChange={(event) => {
                 const next = decimalInput(event.target.value);
                 if (next !== null) setAmount(next);
@@ -374,7 +391,7 @@ export function IntentForm({
           </label>
           <label className="field-well block rounded-3xl px-4 py-3">
             <span className="mb-1 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-xs text-mist">
-              <span>Limit (encrypted)</span>
+              <span>Minimum received</span>
               <span>{tokenBalance(receiveToken?.symbol, receiveBalance)}</span>
             </span>
             <input
@@ -383,7 +400,7 @@ export function IntentForm({
               inputMode="decimal"
               autoComplete="off"
               placeholder="0"
-              aria-label="Limit"
+              aria-label="Minimum received"
               onChange={(event) => {
                 const next = decimalInput(event.target.value);
                 if (next !== null) setLimit(next);
@@ -442,6 +459,10 @@ export function IntentForm({
                   : "Solver is not whitelisted on IntentRegistry."}
             </p>
           ) : null}
+          <p className="text-xs text-mist" data-testid="settlement-note">
+            A confirmed order stores the encrypted amount. Token balances change when the whitelisted solver fills it,
+            before the order expires.
+          </p>
           {isOwner && solverAddress && solverAllowed.data === false ? (
             <button
               type="button"

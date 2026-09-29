@@ -113,6 +113,14 @@ export function formatPrice(priceX18: bigint) {
   return `${formatUnits(priceX18, 18, 6)} NIX`;
 }
 
+/** Constant-product output. Same formula as `NixPair.quoteSwap`, with no fee. */
+export function quoteSwap(amountIn: bigint, reserveIn: bigint, reserveOut: bigint) {
+  if (amountIn <= 0n || reserveIn <= 0n || reserveOut <= 0n) return null;
+  const amountOut = (reserveOut * amountIn) / (reserveIn + amountIn);
+  if (amountOut <= 0n) return null;
+  return amountOut;
+}
+
 /** Local preview of NixPair.addLiquidity. Deposit amounts are public; this does not quote a swap. */
 export function quoteAdd(
   nixAmount: bigint,

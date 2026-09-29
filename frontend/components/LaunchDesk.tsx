@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
-import { useAccount, useReadContract, useSwitchChain } from "wagmi";
+import { useAccount, useReadContract, useReadContracts, useSwitchChain } from "wagmi";
 import { abis } from "@/config/contracts";
 import { TxButtonContent } from "@/components/TxButton";
 import { TxNotice } from "@/components/TxNotice";
@@ -28,7 +28,7 @@ function seedCapacity(data: unknown) {
 }
 
 export function LaunchDesk() {
-  const { isConnected } = useAccount();
+  const { address, isConnected } = useAccount();
   const { openConnectModal } = useConnectModal();
   const { switchChain, isPending: switching } = useSwitchChain();
   const launches = useLaunches();
@@ -41,7 +41,29 @@ export function LaunchDesk() {
     chainId: launches.chainId,
     query: { enabled: Boolean(launches.launchpad), refetchInterval: 8_000 },
   });
+  const bpsQuery = useReadContract({
+    address: launches.launchpad,
+    abi: abis.NixLaunchpad,
+    functionName: "LIQUIDITY_BPS",
+    chainId: launches.chainId,
+    query: { enabled: Boolean(launches.launchpad) },
+  });
   const seed = seedCapacity(seedQuery.data);
+  const liquidityBps = asBigint(bpsQuery.data) ?? LIQUIDITY_BPS;
+  const holdingContracts = useMemo(() => {
+    if (!address || !launches.chainId) return [];
+    return launches.rows.map((row) => ({
+      address: row.token,
+      abi: abis.LaunchToken,
+      functionName: "balanceOf" as const,
+      args: [address] as const,
+      chainId: launches.chainId,
+    }));
+  }, [address, launches.chainId, launches.rows]);
+  const holdings = useReadContracts({
+    contracts: holdingContracts,
+    query: { enabled: holdingContracts.length > 0, refetchInterval: 8_000 },
+  });
   const [name, setName] = useState("");
   const [symbol, setSymbol] = useState("");
   const [supply, setSupply] = useState("");
@@ -49,7 +71,7 @@ export function LaunchDesk() {
   const supplyRaw = /^\d+$/.test(supply) ? parseUnits(supply, 18) : supply === "" ? undefined : null;
   const symbolOk = /^[A-Za-z0-9]{1,11}$/.test(symbol);
   const nameOk = name.trim().length > 0 && name.trim().length <= 32;
-  const poolPreview = supplyRaw && supplyRaw > 0n ? (supplyRaw * LIQUIDITY_BPS) / BPS : undefined;
+  const poolPreview = supplyRaw && supplyRaw > 0n ? (supplyRaw * liquidityBps) / BPS : undefined;
   const creatorPreview = supplyRaw && poolPreview !== undefined ? supplyRaw - poolPreview : undefined;
   const supplyOk =
     supplyRaw !== undefined &&
@@ -120,8 +142,8 @@ export function LaunchDesk() {
         </p>
         <p className="mt-3 text-sm leading-6 text-mist">
           {seed
-            ? `One transaction mints the token. You receive 98% of the supply. The other 2% is paired with ${formatUnits(seed.seedNix, 18, 0)} NIX, so the pool can be traded as soon as the transaction confirms. ${seed.launchesRemaining.toString()} seeded launches remain. One active launch per wallet.`
-            : "Create a fixed-supply token and its public NIX pool. One active launch per wallet. Retired tokens stay listed."}
+            ? `Create token is one signature. Your wallet receives 98% of the supply. The contract pairs the other 2% with ${formatUnits(seed.seedNix, 18, 0)} NIX and opens the pool, so the token is on Swap as soon as the transaction confirms. ${seed.launchesRemaining.toString()} opening pools can still be funded. One active launch per wallet.`
+            : "Create token is one signature. Your wallet receives 98% of the supply, and the contract opens the NIX pool with the other 2%. One active launch per wallet."}
         </p>
         {launches.loading ? (
           <p className="mt-4 text-sm text-mist">Reading launches…</p>
@@ -250,7 +272,11 @@ export function LaunchDesk() {
           <p className="mt-3 text-sm text-rose-300">The launchpad lists tokens, but this page could not decode them.</p>
         ) : null}
         <div className="mt-3 space-y-3">
-          {launches.rows.map((row) => (
+          {launches.rows.map((row, index) => {
+            const holding = holdings.data?.[index];
+            const held = holding?.status === "success" && typeof holding.result === "bigint" ? holding.result : undefined;
+            const showHolding = Boolean(address && row.creator.toLowerCase() === address.toLowerCase());
+            return (
             <article key={row.token} className="rounded-2xl border border-white/10 px-3 py-3">
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -260,6 +286,11 @@ export function LaunchDesk() {
                   <p className="mt-1 text-[11px] text-mist">
                     {formatUnits(row.supply, 18, 2)} supply · {shortAddress(row.creator)}
                   </p>
+                  {showHolding ? (
+                    <p className="mt-1 text-[11px] text-mist" data-testid="creator-balance">
+                      {held === undefined ? "Reading your wallet…" : `In your wallet: ${formatUnits(held, 18)} ${row.symbol}`}
+                    </p>
+                  ) : null}
                 </div>
                 <span className="rounded-full bg-white/5 px-2 py-1 text-[11px] text-mist">
                   {row.active ? "Active" : "Retired"}
@@ -272,7 +303,8 @@ export function LaunchDesk() {
                 Add more liquidity
               </Link>
             </article>
-          ))}
+            );
+          })}
         </div>
       </section>
     </main>
