@@ -5,20 +5,25 @@
   "scripts": {
     "test": "hardhat test",
     "deploy": "hardhat run scripts/deploy.ts",
-    "solve": "hardhat run scripts/solver.ts"
+    "solve": "hardhat run scripts/solver.ts",
+    "build": "tsc -p tsconfig.solver.json",
+    "start": "node dist/scripts/server-solver.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
+  "dependencies": {
+    "@cofhe/sdk": "^0.7.1",
+    "dotenv": "^18.0.3",
+    "ethers": "^6.17.0"
+  },
   "devDependencies": {
     "@cofhe/hardhat-plugin": "^0.7.1",
-    "@cofhe/sdk": "^0.7.1",
     "@fhenixprotocol/cofhe-contracts": "^0.2.0",
     "@nomicfoundation/hardhat-toolbox": "^6.1.2",
     "@openzeppelin/contracts": "^5.4.0",
     "@types/node": "^26.6.2",
-    "dotenv": "^18.0.3",
     "hardhat": "^2.29.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"

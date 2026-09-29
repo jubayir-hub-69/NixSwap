@@ -9,6 +9,9 @@ node_modules
 /cache
 /artifacts
 
+# Render web service build
+/dist
+
 # TypeChain files
 /typechain
 /typechain-types
