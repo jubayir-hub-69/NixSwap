@@ -19,7 +19,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "NixSwap",
   description:
-    "Shielded swaps on Arbitrum Sepolia, Base Sepolia, and Ethereum Sepolia.",
+    "Shielded swaps, a LayerZero bridge, and wallet transfers on Arbitrum Sepolia, Base Sepolia, and Ethereum Sepolia.",
 };
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {

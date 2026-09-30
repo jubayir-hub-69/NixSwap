@@ -12,7 +12,8 @@ const links = [
   { href: "/", label: "Swap" },
   { href: "/pool", label: "Pool" },
   { href: "/launch", label: "Launch" },
-  { href: "/trade", label: "Trade" },
+  { href: "/bridge", label: "Bridge" },
+  { href: "/send", label: "Send" },
 ];
 
 function NavLinks({
@@ -34,7 +35,7 @@ function NavLinks({
             href={link.href}
             onClick={onNavigate}
             data-testid={`nav-${link.label.toLowerCase()}`}
-            className={`rounded-full px-3 py-1.5 text-sm transition ${
+            className={`rounded-full px-2.5 py-1.5 text-sm transition ${
               active
                 ? "bg-cyan-glow/10 text-cyan-glow shadow-[inset_0_0_0_1px_rgba(62,240,255,0.28)]"
                 : "text-mist hover:bg-white/5 hover:text-frost"

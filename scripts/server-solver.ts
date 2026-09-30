@@ -2,6 +2,7 @@ import "dotenv/config";
 import http from "node:http";
 import path from "node:path";
 import { JsonRpcProvider, Wallet } from "ethers";
+import { retryInboundBridges, watchUncoveredBridges } from "./bridge-watch.js";
 import {
   createRuntime,
   delay,
@@ -139,6 +140,16 @@ async function watchNetwork(network: SolverNetwork, key: string, pollMs: number)
     } catch (error) {
       console.log(`[${network.name}] poll failed. ${detail(error)}`);
     }
+    try {
+      await retryInboundBridges({
+        name: network.name,
+        chainId: network.chainId,
+        signer: runtime.signer,
+        confirms: runtime.confirms,
+      });
+    } catch (error) {
+      console.log(`[${network.name}] bridge poll failed. ${detail(error)}`);
+    }
     await delay(pollMs);
   }
 }
@@ -158,7 +169,10 @@ async function startSolvers() {
 
   const names = networks.map((network) => `${network.name} (${network.chainId})`).join(", ");
   console.log(`Watching ${names}.`);
-  await Promise.all(networks.map((network) => watchNetwork(network, key, pollMs)));
+  await Promise.all([
+    ...networks.map((network) => watchNetwork(network, key, pollMs)),
+    watchUncoveredBridges(new Set(networks.map((network) => network.chainId)), key, pollMs),
+  ]);
 }
 
 function main() {

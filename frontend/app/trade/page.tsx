@@ -1,12 +1,5 @@
-"use client";
-
-import { Suspense } from "react";
-import { IntentForm } from "@/components/IntentForm";
+import { redirect } from "next/navigation";
 
 export default function TradePage() {
-  return (
-    <Suspense fallback={null}>
-      <IntentForm title="Trade" intentType={2} />
-    </Suspense>
-  );
+  redirect("/bridge");
 }

@@ -14,5 +14,5 @@
     "declaration": false,
     "types": ["node"]
   },
-  "include": ["scripts/server-solver.ts", "scripts/solver-core.ts"]
+  "include": ["scripts/server-solver.ts", "scripts/solver-core.ts", "scripts/bridge-watch.ts", "scripts/layerzero.ts"]
 }

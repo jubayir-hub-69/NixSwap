@@ -5,6 +5,7 @@
   "scripts": {
     "test": "hardhat test",
     "deploy": "hardhat run scripts/deploy.ts",
+    "deploy:bridge": "hardhat run scripts/deploy-bridge.ts",
     "solve": "hardhat run scripts/solver.ts",
     "build": "tsc -p tsconfig.solver.json",
     "start": "node dist/scripts/server-solver.js"

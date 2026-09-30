@@ -40,6 +40,13 @@ export function formatBalance(
   return formatUnits(value, decimals);
 }
 
+export function plainUnits(value: bigint, decimals: number) {
+  const base = 10n ** BigInt(decimals);
+  const whole = value / base;
+  const fraction = (value % base).toString().padStart(decimals, "0").replace(/0+$/, "");
+  return fraction.length > 0 ? `${whole.toString()}.${fraction}` : whole.toString();
+}
+
 export function formatUnits(value: bigint, decimals: number, maxFraction = 6): string {
   const base = 10n ** BigInt(decimals);
   const whole = value / base;
