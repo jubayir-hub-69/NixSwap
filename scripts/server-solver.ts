@@ -3,6 +3,7 @@ import http from "node:http";
 import path from "node:path";
 import { JsonRpcProvider, Wallet } from "ethers";
 import { retryInboundBridges, watchUncoveredBridges } from "./bridge-watch.js";
+import { settleOmnichain } from "./launch-relay.js";
 import {
   createRuntime,
   delay,
@@ -139,6 +140,11 @@ async function watchNetwork(network: SolverNetwork, key: string, pollMs: number)
       await settleOpenIntents(runtime);
     } catch (error) {
       console.log(`[${network.name}] poll failed. ${detail(error)}`);
+    }
+    try {
+      await settleOmnichain(runtime);
+    } catch (error) {
+      console.log(`[${network.name}] omnichain poll failed. ${detail(error)}`);
     }
     try {
       await retryInboundBridges({

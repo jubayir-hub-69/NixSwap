@@ -14,6 +14,10 @@ const config: HardhatUserConfig = {
     settings: {
       // Required by @fhenixprotocol/cofhe-contracts (transient storage opcodes).
       evmVersion: "cancun",
+      // The launchpad's relay and receive paths pass more values than the legacy
+      // codegen stack allows. viaIR plus the optimizer compiles those paths.
+      viaIR: true,
+      optimizer: { enabled: true, runs: 200 },
     },
   },
   networks: {

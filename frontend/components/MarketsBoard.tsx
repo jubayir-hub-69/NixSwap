@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { AddToWalletButton } from "@/components/AddToWalletButton";
+import { useChainHoldings } from "@/hooks/useChainHoldings";
 import { useLaunches } from "@/hooks/useLaunches";
 import { useMarketQuotes } from "@/hooks/useMarketQuotes";
 import { formatUnits } from "@/lib/amount";
-import { errorText } from "@/lib/deployment";
+import { errorText, preferredChainId } from "@/lib/deployment";
 import { formatChange, formatPrice, shortAddress, type LaunchRow, type MarketFigures } from "@/lib/markets";
 
 type Quote = LaunchRow & MarketFigures;
@@ -48,6 +50,8 @@ function StatCard({ title, rows }: { title: string; rows: Quote[] }) {
 export function MarketsBoard() {
   const launches = useLaunches();
   const quoted = useMarketQuotes(launches.rows, launches.chainId, launches.deployment?.NixToken);
+  const bookChain = launches.chainId ?? preferredChainId;
+  const book = useChainHoldings(bookChain);
   const quotes: Quote[] = quoted.quotes;
   const priced = quotes.filter((row): row is Quote & { ready: true } => row.ready && row.price > 0n);
   const gainers = [...priced].sort((left, right) => (right.change ?? 0) - (left.change ?? 0)).slice(0, 5);
@@ -61,6 +65,11 @@ export function MarketsBoard() {
       return leftVolume > rightVolume ? -1 : 1;
     })
     .slice(0, 5);
+  const listed = new Set([
+    ...quotes.map((row) => row.token.toLowerCase()),
+    ...launches.rows.map((row) => row.token.toLowerCase()),
+  ]);
+  const extras = launches.chainId ? book.holdings.filter((holding) => !listed.has(holding.address.toLowerCase())) : [];
   const readyVolumes = quotes.filter((row) => row.ready);
   const totalVolume =
     readyVolumes.length === 0
@@ -89,6 +98,17 @@ export function MarketsBoard() {
           column is the on-chain move since the daily price mark. Until that mark rolls, it shows the change since
           launch or the last reserve update. Volume is NIX added to the pool during the current window.
         </p>
+        {launches.chainId && (book.loading || extras.length > 0) ? (
+          <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
+            {book.loading && extras.length === 0 ? <p className="text-xs text-mist">Reading tokens you can add…</p> : null}
+            {extras.map((holding) => (
+              <span key={holding.address} className="inline-flex items-center gap-2 text-xs text-mist">
+                <span>{holding.symbol ?? (holding.loading ? "Reading…" : shortAddress(holding.address))}</span>
+                <AddToWalletButton token={holding.address} chainId={bookChain} />
+              </span>
+            ))}
+          </div>
+        ) : null}
       </section>
 
       {!launches.launchpad && !launches.loading ? (
@@ -135,6 +155,9 @@ export function MarketsBoard() {
                       <span className="mt-0.5 block text-[11px] text-mist">
                         {row.name} · {shortAddress(row.token)}
                       </span>
+                      {launches.chainId ? (
+                        <AddToWalletButton token={row.token} chainId={launches.chainId} className="mt-1 text-[11px] text-cyan-glow disabled:opacity-40" />
+                      ) : null}
                     </td>
                     <td className="px-3 py-3 text-frost">{priceLabel(row)}</td>
                     <td className={`px-3 py-3 ${row.ready && row.change !== null && row.change > 0 ? "text-emerald-300" : row.ready && row.change !== null && row.change < 0 ? "text-rose-300" : "text-mist"}`}>

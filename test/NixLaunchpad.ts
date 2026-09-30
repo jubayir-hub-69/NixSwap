@@ -1,5 +1,6 @@
 import { expect } from "chai";
 import hre from "hardhat";
+import { deployOmnichain } from "./omnichainFixture";
 
 describe("NixLaunchpad", function () {
   const ONE = hre.ethers.parseUnits("1", 18);
@@ -10,14 +11,14 @@ describe("NixLaunchpad", function () {
     await nix.mint(owner.address, 1_000_000n * ONE);
     await nix.mint(alice.address, 10_000n * ONE);
     await nix.mint(bob.address, 10_000n * ONE);
-    const launchpad = await hre.ethers.deployContract("NixLaunchpad", [await nix.getAddress()]);
+    const omnichain = await deployOmnichain(nix, owner.address, funded ? 5n : 0n);
+    const launchpad = omnichain.pads[0];
     const seed = await launchpad.SEED_NIX();
-    if (funded) {
-      const budget = seed * 5n;
-      await nix.connect(owner).approve(await launchpad.getAddress(), budget);
-      await launchpad.connect(owner).fundSeed(budget);
-    }
-    return { nix, launchpad, owner, alice, bob, seed };
+    return { nix, launchpad, owner, alice, bob, seed, omnichain };
+  }
+
+  function perChain(supply: bigint) {
+    return (supply * 200n) / 10_000n;
   }
 
   it("lists every launch publicly and allows one active token per wallet", async function () {
@@ -40,10 +41,11 @@ describe("NixLaunchpad", function () {
     expect(listed[1].creator).to.equal(bob.address);
 
     const alpha = await hre.ethers.getContractAt("LaunchToken", listed[0].token);
-    const liquidityTokens = supply * 200n / 10_000n;
-    expect(await alpha.balanceOf(alice.address)).to.equal(supply - liquidityTokens);
+    const liquidityTokens = perChain(supply);
+    const creatorAmount = supply - liquidityTokens * 3n;
+    expect(await alpha.balanceOf(alice.address)).to.equal(creatorAmount);
     expect(await alpha.balanceOf(await launchpad.getAddress())).to.equal(0n);
-    expect(await alpha.totalSupply()).to.equal(supply);
+    expect(await alpha.totalSupply()).to.equal(creatorAmount + liquidityTokens);
     expect(await nix.balanceOf(alice.address)).to.equal(10_000n * ONE);
     const alphaPair = await hre.ethers.getContractAt("NixPair", listed[0].pair);
     expect(await alpha.balanceOf(await alphaPair.getAddress())).to.equal(liquidityTokens);
@@ -68,7 +70,7 @@ describe("NixLaunchpad", function () {
     const listed = await launchpad.allTokens();
     const token = await hre.ethers.getContractAt("LaunchToken", listed[0].token);
     const pair = await hre.ethers.getContractAt("NixPair", listed[0].pair);
-    const liquidityTokens = supply * 200n / 10_000n;
+    const liquidityTokens = perChain(supply);
     const locked = await pair.liquidityOf(await launchpad.getAddress());
 
     expect(await pair.reserveNix()).to.equal(seed);
@@ -117,7 +119,7 @@ describe("NixLaunchpad", function () {
     const pairAddress = await pair.getAddress();
     const nixAddress = await nix.getAddress();
     const tokenAddress = await token.getAddress();
-    const liquidityTokens = supply * 200n / 10_000n;
+    const liquidityTokens = perChain(supply);
 
     const nixIn = 1n * ONE;
     const tokenOut = await pair.quoteSwap(nixAddress, nixIn);
@@ -152,5 +154,121 @@ describe("NixLaunchpad", function () {
       "InsufficientSeed"
     );
     await expect(launchpad.fundSeed(0)).to.be.revertedWithCustomError(launchpad, "ZeroSeed");
+  });
+
+  it("refuses a launch until both remote chains are wired", async function () {
+    const { nix, owner, alice } = await deploy(false);
+    const endpoint = await hre.ethers.deployContract("MockLayerZeroEndpoint", [40231]);
+    const tokenFactory = await hre.ethers.deployContract("LaunchFactory");
+    const lone = await hre.ethers.deployContract("NixLaunchpad", [
+      await nix.getAddress(),
+      await endpoint.getAddress(),
+      40231,
+      await tokenFactory.getAddress(),
+      owner.address,
+    ]);
+    await tokenFactory.setLaunchpad(await lone.getAddress());
+    const seed = await lone.SEED_NIX();
+    await nix.connect(owner).approve(await lone.getAddress(), seed);
+    await lone.fundSeed(seed);
+    await expect(lone.connect(alice).createToken("Alpha", "ALP", 1_000_000n * ONE)).to.be.revertedWithCustomError(
+      lone,
+      "RemotesNotConfigured"
+    );
+  });
+
+  it("seeds 2% on every chain and burns on the source when the peer mints", async function () {
+    const { nix, launchpad, alice, bob, seed, omnichain } = await deploy();
+    const supply = 1_000_000n * ONE;
+    const liquidity = perChain(supply);
+    await launchpad.connect(alice).createToken("Alpha", "ALP", supply);
+    const listed = await launchpad.allTokens();
+    const sourceToken = await hre.ethers.getContractAt("LaunchToken", listed[0].token);
+    const fee = await launchpad.quoteRelay(0);
+    expect(fee).to.equal(hre.ethers.parseEther("0.002"));
+    await launchpad.connect(alice).relay(0, { value: fee });
+
+    const sourceEndpoint = omnichain.endpoints[0];
+    expect(await sourceEndpoint.sentCount()).to.equal(2);
+
+    for (let index = 0; index < 2; index++) {
+      const sent = await sourceEndpoint.sentMessage(index);
+      const destIndex = omnichain.eids.findIndex((eid) => eid === Number(sent.dstEid));
+      expect(destIndex).to.be.greaterThan(0);
+      const destPad = omnichain.pads[destIndex];
+      const destEndpoint = omnichain.endpoints[destIndex];
+      await destEndpoint.deliver(
+        await destPad.getAddress(),
+        omnichain.eids[0],
+        await launchpad.getAddress(),
+        sent.guid,
+        sent.nonce,
+        sent.message
+      );
+      const predicted = await launchpad.predictRemoteToken(0, sent.dstEid);
+      expect(await sourceToken.peers(sent.dstEid)).to.equal(hre.ethers.zeroPadValue(predicted, 32));
+      await destPad.finalizeRemote(omnichain.eids[0], 0);
+      const mirrored = await destPad.allTokens();
+      expect(mirrored[0].token).to.equal(predicted);
+      expect(mirrored[0].creator).to.equal(alice.address);
+      expect(await destPad.mirrored(0)).to.equal(true);
+      const destToken = await hre.ethers.getContractAt("LaunchToken", mirrored[0].token);
+      const destPair = await hre.ethers.getContractAt("NixPair", mirrored[0].pair);
+      expect(await destToken.totalSupply()).to.equal(liquidity);
+      expect(await destPair.reserveToken()).to.equal(liquidity);
+      expect(await destPair.reserveNix()).to.equal(seed);
+      expect(await destToken.peers(omnichain.eids[0])).to.equal(
+        hre.ethers.zeroPadValue(await sourceToken.getAddress(), 32)
+      );
+      expect(await nix.balanceOf(await destPad.getAddress())).to.equal(seed * 4n);
+    }
+
+    const creatorAmount = supply - liquidity * 3n;
+    expect(await sourceToken.balanceOf(alice.address)).to.equal(creatorAmount);
+    const mirroredSupply = liquidity * 2n;
+    expect((await sourceToken.totalSupply()) + mirroredSupply).to.equal(supply);
+
+    const destinationEid = omnichain.eids[1];
+    const amount = 1_000n * ONE;
+    const bridgeFee = await sourceToken.quoteSend(destinationEid, bob.address, amount);
+    await sourceToken.connect(alice).send(destinationEid, bob.address, amount, { value: bridgeFee });
+    const bridge = await sourceEndpoint.sentMessage(2);
+    const destToken = await hre.ethers.getContractAt(
+      "LaunchToken",
+      await launchpad.predictRemoteToken(0, destinationEid)
+    );
+    await omnichain.endpoints[1].deliver(
+      await destToken.getAddress(),
+      omnichain.eids[0],
+      await sourceToken.getAddress(),
+      bridge.guid,
+      bridge.nonce,
+      bridge.message
+    );
+
+    expect(await sourceToken.balanceOf(alice.address)).to.equal(creatorAmount - amount);
+    expect(await destToken.balanceOf(bob.address)).to.equal(amount);
+    expect(await destToken.totalSupply()).to.equal(liquidity + amount);
+    expect((await sourceToken.totalSupply()) + (await destToken.totalSupply()) + liquidity).to.equal(supply);
+
+    await expect(
+      omnichain.endpoints[1].deliver(
+        await destToken.getAddress(),
+        omnichain.eids[0],
+        await sourceToken.getAddress(),
+        bridge.guid,
+        bridge.nonce,
+        bridge.message
+      )
+    ).to.be.revertedWithCustomError(destToken, "AlreadyExecuted");
+    await expect(
+      destToken.connect(alice).lzReceive(
+        { srcEid: omnichain.eids[0], sender: hre.ethers.zeroPadValue(alice.address, 32), nonce: 9 },
+        hre.ethers.id("nope"),
+        bridge.message,
+        alice.address,
+        "0x"
+      )
+    ).to.be.revertedWithCustomError(destToken, "OnlyEndpoint");
   });
 });

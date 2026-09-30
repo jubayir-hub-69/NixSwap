@@ -13,7 +13,7 @@ const links = [
   { href: "/pool", label: "Pool" },
   { href: "/launch", label: "Launch" },
   { href: "/bridge", label: "Bridge" },
-  { href: "/send", label: "Send" },
+  { href: "/portfolio", label: "Portfolio" },
 ];
 
 function NavLinks({

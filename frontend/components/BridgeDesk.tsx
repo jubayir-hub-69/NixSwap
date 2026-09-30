@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { erc20Abi } from "viem";
 import { useAccount, useBalance, useReadContract, useReadContracts, useSwitchChain } from "wagmi";
 import { abis } from "@/config/contracts";
+import { OftBridge } from "@/components/OftBridge";
 import { TxButtonContent } from "@/components/TxButton";
 import { TxNotice } from "@/components/TxNotice";
 import { useChainTx } from "@/hooks/useChainTx";
@@ -342,8 +343,9 @@ export function BridgeDesk() {
       <section className="glass-panel rounded-[28px] p-5">
         <h1 className="text-lg font-semibold tracking-tight">Bridge</h1>
         <p className="mt-1 text-xs leading-5 text-mist">
-          Lock a registered token on this network. LayerZero releases the same amount from escrow on the destination.
-          Nothing is minted, and a solver cannot move the escrow.
+          Registered tokens, including NIX, lock on this network. LayerZero releases the same amount from escrow on
+          the destination. That path never mints. A launched token that reports an omnichain endpoint id burns here
+          and mints on the destination. A token is listed only when this chain returns its address.
         </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <label className="block text-xs text-mist">
@@ -386,8 +388,12 @@ export function BridgeDesk() {
       </section>
 
       <section className="glass-panel rounded-[28px] p-5">
+        <h2 className="text-sm font-semibold text-frost">Lock and release</h2>
+        <p className="mt-1 text-xs leading-5 text-mist">
+          This form approves NixBridge, then locks the token. Use it for NIX and other tokens the bridge has registered.
+        </p>
         <form
-          className="space-y-3"
+          className="mt-4 space-y-3"
           onSubmit={(event) => {
             event.preventDefault();
             if (busy) return;
@@ -574,6 +580,7 @@ export function BridgeDesk() {
           <TxNotice phase={liquidityTx.phase} error={liquidityTx.error} hash={liquidityTx.hash} chainId={source?.chainId} />
         </form>
       </section>
+      <OftBridge />
     </main>
   );
 }

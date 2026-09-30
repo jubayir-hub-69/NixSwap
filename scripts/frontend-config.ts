@@ -22,6 +22,7 @@ export type DeploymentRecord = {
   NixPool: string;
   NixLaunch: string;
   NixLaunchpad: string;
+  LaunchFactory?: string;
   NixBridge?: string;
 };
 

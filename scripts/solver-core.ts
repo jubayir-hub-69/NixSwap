@@ -136,6 +136,12 @@ export async function watchIntents(runtime: SolverRuntime, options: { loop: bool
   log(runtime, `IntentRegistry ${await runtime.registry.getAddress()}`);
   do {
     await settleOpenIntents(runtime);
+    try {
+      const { settleOmnichain } = await import("./launch-relay.js");
+      await settleOmnichain(runtime);
+    } catch (error) {
+      log(runtime, `Omnichain launch poll failed. ${detail(error)}`);
+    }
     if (!options.loop) break;
     await delay(options.pollMs);
   } while (options.loop);

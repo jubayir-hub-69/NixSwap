@@ -2,6 +2,7 @@ import { expect } from "chai";
 import hre from "hardhat";
 import { Encryptable } from "@cofhe/sdk";
 import { time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
+import { deployOmnichain } from "./omnichainFixture";
 
 const ONE = hre.ethers.parseUnits("1", 18);
 const CONFIDENTIAL = 1_000_000n;
@@ -12,10 +13,9 @@ describe("Swap fill", function () {
     const nix = await hre.ethers.deployContract("NixToken", ["Nix Token", "NIX", owner.address]);
     await nix.mint(owner.address, 1_000_000n * ONE);
     await nix.mint(alice.address, 10_000n * ONE);
-    const launchpad = await hre.ethers.deployContract("NixLaunchpad", [await nix.getAddress()]);
+    const { pads } = await deployOmnichain(nix, owner.address, 1n);
+    const launchpad = pads[0];
     const seed = await launchpad.SEED_NIX();
-    await nix.connect(owner).approve(await launchpad.getAddress(), seed);
-    await launchpad.connect(owner).fundSeed(seed);
     const registry = await hre.ethers.deployContract("IntentRegistry", [owner.address]);
     await registry.connect(owner).setSolver(solver.address, true);
 

@@ -30,6 +30,11 @@ export function parseWalletAddress(value: string) {
   }
 }
 
+export function addressFromPeer(peer: unknown) {
+  if (typeof peer !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(peer)) return undefined;
+  return parseWalletAddress(`0x${peer.slice(-40)}`);
+}
+
 export function peerMatches(peer: unknown, bridge: `0x${string}` | undefined) {
   if (!bridge || typeof peer !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(peer)) return false;
   return peer.toLowerCase() === pad(bridge, { size: 32 }).toLowerCase();

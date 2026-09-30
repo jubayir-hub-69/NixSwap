@@ -1,6 +1,7 @@
 import path from "node:path";
 import hre from "hardhat";
 import { loadDeployments, writeFrontendConfig, type DeploymentRecord } from "./frontend-config";
+import { LAYERZERO_CHAINS, LAYERZERO_TESTNET_ENDPOINT, layerZeroChain } from "./layerzero";
 
 const TOKEN_NAME = process.env.NIX_TOKEN_NAME ?? "Nix Token";
 const TOKEN_SYMBOL = process.env.NIX_TOKEN_SYMBOL ?? "NIX";
@@ -65,6 +66,15 @@ async function main() {
   nonce = await settledNonce(deployer.address);
   console.log(`Deploying from ${deployer.address} at nonce ${nonce} with ${confirmations} confirmation(s).`);
 
+  if (process.env.WIRE_PEERS === "1") {
+    const existing = loadDeployments(path.join(process.cwd(), "frontend", "config", "deployments.json"))[String(chainId)];
+    if (!existing?.NixLaunchpad) {
+      throw new Error(`No NixLaunchpad is saved for chain ${chainId}.`);
+    }
+    await wireLaunchpadPeers(chainId, existing.NixLaunchpad);
+    return;
+  }
+
   if (process.env.REPLACE_SWAP === "1") {
     await replaceSwap(chainId, networkName);
     return;
@@ -112,8 +122,10 @@ async function main() {
     BigInt(latest.timestamp) + BigInt(BIDDING_SECONDS),
   ]);
 
-  const launchpad = await deployFresh("NixLaunchpad", [tokenAddress]);
+  const launched = await deployLaunchpad(tokenAddress, chainId);
+  const launchpad = launched.launchpad;
   await fundLaunchSeed(token, launchpad);
+  await wireLaunchpadPeers(chainId, await launchpad.getAddress());
 
   const record: DeploymentRecord = {
     chainId,
@@ -124,6 +136,7 @@ async function main() {
     NixPool: await pool.getAddress(),
     NixLaunch: await launch.getAddress(),
     NixLaunchpad: await launchpad.getAddress(),
+    LaunchFactory: await launched.tokenFactory.getAddress(),
   };
 
   await writeFrontendConfig({ [String(chainId)]: record });
@@ -186,13 +199,16 @@ async function replaceSwap(chainId: number, networkName: string) {
   const token = await hre.ethers.getContractAt("NixToken", existing.NixToken, deployer);
   const registry = await deployFresh("IntentRegistry", [deployer.address]);
   await send(registry.setSolver(deployer.address, true, await overrides()));
-  const launchpad = await deployFresh("NixLaunchpad", [existing.NixToken]);
+  const launched = await deployLaunchpad(existing.NixToken, chainId);
+  const launchpad = launched.launchpad;
   await fundLaunchSeed(token, launchpad);
   existing.IntentRegistry = await registry.getAddress();
   existing.NixLaunchpad = await launchpad.getAddress();
+  existing.LaunchFactory = await launched.tokenFactory.getAddress();
   existing.network = networkName;
   existing.deployer = deployer.address;
   await writeFrontendConfig({ [String(chainId)]: existing });
+  await wireLaunchpadPeers(chainId, existing.NixLaunchpad);
   console.log(`Replaced IntentRegistry on ${networkName}: ${existing.IntentRegistry}`);
   console.log(`Replaced NixLaunchpad on ${networkName}: ${existing.NixLaunchpad}`);
   console.log(`Solver whitelisted: ${deployer.address}`);
@@ -206,13 +222,51 @@ async function replaceLaunchpad(chainId: number, networkName: string) {
     throw new Error(`No NixToken is saved for chain ${chainId}.`);
   }
   const token = await hre.ethers.getContractAt("NixToken", existing.NixToken, deployer);
-  const launchpad = await deployFresh("NixLaunchpad", [existing.NixToken]);
+  const launched = await deployLaunchpad(existing.NixToken, chainId);
+  const launchpad = launched.launchpad;
   await fundLaunchSeed(token, launchpad);
   existing.NixLaunchpad = await launchpad.getAddress();
+  existing.LaunchFactory = await launched.tokenFactory.getAddress();
   existing.network = networkName;
   existing.deployer = deployer.address;
   await writeFrontendConfig({ [String(chainId)]: existing });
+  await wireLaunchpadPeers(chainId, existing.NixLaunchpad);
   console.log(`Replaced NixLaunchpad on ${networkName}: ${existing.NixLaunchpad}`);
+}
+
+function launchpadArgs(nix: string, chainId: number, factory: string) {
+  const chain = layerZeroChain(chainId);
+  return [nix, LAYERZERO_TESTNET_ENDPOINT, chain.eid, factory, deployer.address];
+}
+
+async function deployLaunchpad(nix: string, chainId: number) {
+  const tokenFactory = await deployFresh("LaunchFactory", []);
+  const launchpad = await deployFresh("NixLaunchpad", launchpadArgs(nix, chainId, await tokenFactory.getAddress()));
+  await send(tokenFactory.setLaunchpad(await launchpad.getAddress(), await overrides()));
+  return { tokenFactory, launchpad };
+}
+
+async function wireLaunchpadPeers(chainId: number, launchpadAddress: string) {
+  const launchpad = await hre.ethers.getContractAt("NixLaunchpad", launchpadAddress, deployer);
+  const deployments = loadDeployments(path.join(process.cwd(), "frontend", "config", "deployments.json"));
+  for (const remote of LAYERZERO_CHAINS) {
+    if (remote.chainId === chainId) continue;
+    const saved = deployments[String(remote.chainId)]?.NixLaunchpad;
+    const remoteFactory = deployments[String(remote.chainId)]?.LaunchFactory;
+    if (!saved || !remoteFactory) {
+      console.log(`Peer for ${remote.name} waits until that omnichain launchpad is deployed.`);
+      continue;
+    }
+    const current = await launchpad.remotes(remote.eid);
+    if (current.set) {
+      console.log(`Peer for ${remote.name} is already set.`);
+      continue;
+    }
+    await send(
+      launchpad.setRemote(remote.eid, saved, LAYERZERO_TESTNET_ENDPOINT, remoteFactory, await overrides()),
+    );
+    console.log(`Set ${remote.name} launchpad peer to ${saved}.`);
+  }
 }
 
 async function settledNonce(account: string) {

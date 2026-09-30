@@ -1,12 +1,5 @@
-"use client";
-
-import { Suspense } from "react";
-import { SendDesk } from "@/components/SendDesk";
+import { redirect } from "next/navigation";
 
 export default function SendPage() {
-  return (
-    <Suspense fallback={null}>
-      <SendDesk />
-    </Suspense>
-  );
+  redirect("/portfolio");
 }

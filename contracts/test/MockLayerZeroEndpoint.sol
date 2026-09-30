@@ -21,6 +21,15 @@ contract MockLayerZeroEndpoint is ILayerZeroEndpointV2 {
     address public delegate;
     uint64 public outboundNonce;
 
+    struct SentMessage {
+        address sender;
+        uint32 dstEid;
+        bytes32 receiver;
+        bytes32 guid;
+        uint64 nonce;
+        bytes message;
+    }
+
     bytes public lastOptions;
     bytes public lastMessage;
     bytes32 public lastReceiver;
@@ -28,6 +37,7 @@ contract MockLayerZeroEndpoint is ILayerZeroEndpointV2 {
     address public lastSender;
     address public lastRefund;
     bytes32 public lastGuid;
+    SentMessage[] private _sent;
 
     constructor(uint32 eid_) {
         eid = eid_;
@@ -52,7 +62,30 @@ contract MockLayerZeroEndpoint is ILayerZeroEndpointV2 {
         lastSender = msg.sender;
         lastRefund = refundAddress;
         lastGuid = guid;
+        _sent.push(
+            SentMessage({
+                sender: msg.sender,
+                dstEid: params.dstEid,
+                receiver: params.receiver,
+                guid: guid,
+                nonce: outboundNonce,
+                message: params.message
+            })
+        );
         return MessagingReceipt({guid: guid, nonce: outboundNonce, fee: MessagingFee({nativeFee: NATIVE_FEE, lzTokenFee: 0})});
+    }
+
+    function sentCount() external view returns (uint256) {
+        return _sent.length;
+    }
+
+    function sentMessage(uint256 index)
+        external
+        view
+        returns (address sender, uint32 dstEid, bytes32 receiver, bytes32 guid, uint64 nonce, bytes memory message)
+    {
+        SentMessage storage item = _sent[index];
+        return (item.sender, item.dstEid, item.receiver, item.guid, item.nonce, item.message);
     }
 
     function setDelegate(address delegate_) external {
