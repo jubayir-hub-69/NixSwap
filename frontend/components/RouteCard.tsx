@@ -25,7 +25,7 @@ export function RouteCard({
 }) {
   const endpointUrl = addressUrl(fromChainId, LAYERZERO_TESTNET_ENDPOINT);
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/25 p-3" data-testid={testId}>
+    <div className="rounded-2xl border border-white/10 bg-ink/45 p-3" data-testid={testId}>
       <p className="text-[11px] uppercase tracking-wide text-mist">Route</p>
       <ol className="mt-2 space-y-2 text-sm text-frost">
         <li>1. {from ?? "Source network"} · {mode === "Lock and release" ? "Lock" : "Burn"} {amount ? `${amount} ` : ""}{token ?? "the token"}</li>

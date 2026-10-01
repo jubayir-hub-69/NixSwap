@@ -8,7 +8,7 @@ export const Tabs = TabsPrimitive.Root;
 export function TabsList({ className, ...props }: ComponentProps<typeof TabsPrimitive.List>) {
   return (
     <TabsPrimitive.List
-      className={`flex flex-wrap gap-1 rounded-full border border-white/10 bg-black/30 p-1 ${className ?? ""}`}
+      className={`flex flex-wrap gap-1 rounded-full border border-white/10 bg-ink/50 p-1 ${className ?? ""}`}
       {...props}
     />
   );

@@ -4,8 +4,7 @@ import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { useAccount } from "wagmi";
 import { useWalletActivity } from "@/hooks/useWalletActivity";
 
-const buttonClass =
-  "min-h-11 rounded-2xl bg-cyan-glow px-4 py-2.5 text-sm font-semibold text-void disabled:cursor-not-allowed disabled:opacity-40";
+const buttonClass = "btn-primary min-h-11 rounded-2xl px-4 py-2.5 text-sm font-semibold";
 
 function formatTime(timestamp: number | null) {
   if (timestamp === null) return "Time unavailable";

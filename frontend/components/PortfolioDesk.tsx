@@ -21,9 +21,8 @@ import { shortAddress } from "@/lib/markets";
 import { isWalletProvider, switchWalletChain } from "@/lib/walletChain";
 
 const fieldClass = "mt-1 w-full rounded-2xl border border-white/10 bg-ink px-3 py-3 text-sm text-frost";
-const buttonClass =
-  "min-h-11 rounded-2xl bg-cyan-glow px-4 py-2.5 text-sm font-semibold text-void disabled:cursor-not-allowed disabled:opacity-40";
-const ghostClass = "min-h-11 rounded-2xl border border-white/15 px-4 py-2.5 text-sm text-frost disabled:opacity-40";
+const buttonClass = "btn-primary min-h-11 rounded-2xl px-4 py-2.5 text-sm font-semibold";
+const ghostClass = "btn-ghost min-h-11 rounded-2xl px-4 py-2.5 text-sm";
 
 type Selection = { chainId: number; token: `0x${string}`; mode: "send" | "receive" };
 

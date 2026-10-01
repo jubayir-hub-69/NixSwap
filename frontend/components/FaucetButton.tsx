@@ -30,7 +30,8 @@ export function FaucetButton() {
   });
   const next = asBigint(readyAt.data);
   const dripAmount = asBigint(drip.data);
-  const dripLabel = dripAmount !== undefined ? `${formatUnits(dripAmount, 18, 0)} NIX` : "500 NIX";
+  const dripLabel =
+    dripAmount !== undefined ? `${formatUnits(dripAmount, 18, 0)} NIX` : deployment ? "Reading…" : "Faucet";
   const now = block.data?.timestamp;
   const cooling = next !== undefined && now !== undefined && now < next;
   const label = tx.pending
@@ -66,13 +67,20 @@ export function FaucetButton() {
       type="button"
       data-testid="faucet-action"
       aria-busy={tx.pending}
-      title={tx.error ?? (cooling ? "This wallet already claimed NIX today" : `Claim ${dripLabel}. One claim per address per day.`)}
+      title={
+        tx.error ??
+        (cooling
+          ? "This wallet already claimed NIX today"
+          : dripAmount !== undefined
+            ? `Claim ${dripLabel}. One claim per address per day.`
+            : "The claim amount is read from the token. One claim per address per day.")
+      }
       disabled={Boolean(isConnected && deployment && (tx.pending || cooling))}
       onClick={() => {
         if (!isConnected) openConnectModal?.();
         else void claim();
       }}
-      className="inline-flex h-10 items-center rounded-full border border-cyan-glow/40 px-3 text-xs font-semibold text-cyan-glow disabled:opacity-40"
+      className="btn-ghost inline-flex h-10 items-center rounded-full px-3 text-xs font-semibold"
     >
       {label}
       <span className="sr-only">{tx.phase ?? tx.error ?? ""}</span>

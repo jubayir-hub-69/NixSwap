@@ -19,7 +19,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "NixSwap",
   description:
-    "Dashboard, shielded swaps, a LayerZero bridge, and portfolio history on Arbitrum Sepolia, Base Sepolia, and Ethereum Sepolia.",
+    "Shielded swaps, a LayerZero bridge, and portfolio history on Arbitrum Sepolia, Base Sepolia, and Ethereum Sepolia.",
 };
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {
@@ -31,10 +31,13 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
     >
       <body className="flex min-h-dvh flex-col font-sans">
-        <Providers cookie={cookie}>
-          <Navbar />
-          {children}
-        </Providers>
+        <div className="atmosphere" aria-hidden="true" />
+        <div className="relative z-10 flex min-h-dvh flex-1 flex-col">
+          <Providers cookie={cookie}>
+            <Navbar />
+            {children}
+          </Providers>
+        </div>
       </body>
     </html>
   );

@@ -2,9 +2,9 @@
 @config "../tailwind.config.ts";
 
 @theme inline {
-  --color-void: #05060a;
-  --color-ink: #090d14;
-  --color-panel: #121a24;
+  --color-void: #070b16;
+  --color-ink: #101a2e;
+  --color-panel: #152238;
   --color-mist: #93a4b8;
   --color-frost: #e8f4fb;
   --color-cyan-glow: #3ef0ff;
@@ -12,13 +12,13 @@
   --color-violet: #7c5cff;
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
-  --shadow-glow: 0 0 48px rgba(62, 240, 255, 0.18);
-  --shadow-card: 0 30px 80px rgba(0, 0, 0, 0.45);
+  --shadow-glow: 0 0 36px rgba(62, 240, 255, 0.38);
+  --shadow-card: 0 30px 80px rgba(2, 6, 18, 0.45);
 }
 
 :root {
   color-scheme: dark;
-  --background: #05060a;
+  --background: #070b16;
   --foreground: #e8f4fb;
 }
 
@@ -27,17 +27,14 @@ body {
   min-height: 100%;
 }
 
+html {
+  background: #070b16;
+}
+
 body {
-  background-color: var(--background);
+  background: transparent;
   color: var(--foreground);
   font-family: var(--font-sans);
-  background-image:
-    radial-gradient(ellipse 70% 45% at 50% -12%, rgba(62, 240, 255, 0.16), transparent 58%),
-    radial-gradient(ellipse 36% 32% at 100% 0%, rgba(124, 92, 255, 0.14), transparent 60%),
-    linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px);
-  background-size: auto, auto, 72px 72px, 72px 72px;
-  background-attachment: fixed;
 }
 
 ::selection {
@@ -45,31 +42,148 @@ body {
   color: #f4fbff;
 }
 
-.glass-panel {
+/* Fixed layer so the grid stays visible behind translucent panels. */
+.atmosphere {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
   background:
-    linear-gradient(180deg, rgba(18, 28, 42, 0.78), rgba(7, 11, 18, 0.9));
-  border: 1px solid rgba(150, 214, 232, 0.16);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 30px 80px rgba(0, 0, 0, 0.45),
-    0 0 64px rgba(62, 240, 255, 0.07);
-  backdrop-filter: blur(22px);
+    radial-gradient(ellipse 88% 52% at 50% -8%, rgba(62, 240, 255, 0.34), transparent 58%),
+    radial-gradient(ellipse 46% 38% at 96% 4%, rgba(124, 92, 255, 0.42), transparent 62%),
+    radial-gradient(ellipse 42% 36% at 4% 92%, rgba(28, 78, 168, 0.48), transparent 64%),
+    radial-gradient(ellipse 55% 40% at 72% 108%, rgba(62, 240, 255, 0.16), transparent 58%),
+    linear-gradient(180deg, #10182e 0%, #0a1020 46%, #0c0a18 100%);
 }
 
-.glass-bar {
-  background: rgba(6, 10, 16, 0.72);
-  border-bottom: 1px solid rgba(150, 214, 232, 0.12);
+.atmosphere::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  background-image:
+    linear-gradient(rgba(62, 240, 255, 0.14) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(62, 240, 255, 0.14) 1px, transparent 1px);
+  background-size: 64px 64px;
+  mask-image: radial-gradient(ellipse 78% 68% at 50% 28%, #000 18%, transparent 76%);
+}
+
+.atmosphere::after {
+  content: "";
+  position: absolute;
+  left: -18%;
+  top: -22%;
+  width: 140%;
+  height: 140%;
+  background:
+    radial-gradient(circle at 22% 28%, rgba(62, 240, 255, 0.22), transparent 26%),
+    radial-gradient(circle at 78% 16%, rgba(140, 96, 255, 0.28), transparent 30%),
+    radial-gradient(circle at 58% 78%, rgba(36, 120, 220, 0.2), transparent 28%);
+  filter: blur(36px);
+  animation: mesh-drift 28s ease-in-out infinite alternate;
+}
+
+@keyframes mesh-drift {
+  from {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    transform: translate3d(-3%, 2.5%, 0) scale(1.06);
+  }
+}
+
+.glass-panel {
+  background: linear-gradient(165deg, rgba(22, 40, 68, 0.68), rgba(8, 14, 28, 0.8));
+  border: 1px solid rgba(120, 210, 240, 0.18);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 24px 70px rgba(2, 6, 18, 0.38),
+    0 0 80px rgba(62, 240, 255, 0.06);
   backdrop-filter: blur(18px);
 }
 
+.glass-bar {
+  background: rgba(7, 14, 28, 0.58);
+  border-bottom: 1px solid rgba(120, 210, 240, 0.16);
+  backdrop-filter: blur(16px);
+}
+
 .field-well {
-  background: rgba(4, 8, 14, 0.55);
-  border: 1px solid rgba(150, 214, 232, 0.1);
+  background: rgba(8, 16, 32, 0.42);
+  border: 1px solid rgba(120, 210, 240, 0.14);
 }
 
 .field-well:focus-within {
-  border-color: rgba(62, 240, 255, 0.45);
-  box-shadow: 0 0 0 3px rgba(62, 240, 255, 0.08);
+  border-color: rgba(62, 240, 255, 0.5);
+  box-shadow: 0 0 0 3px rgba(62, 240, 255, 0.1);
+}
+
+.btn-primary {
+  cursor: pointer;
+  color: #041016;
+  background: linear-gradient(180deg, #8af8ff 0%, #3ef0ff 46%, #14c4e6 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.62),
+    0 0 0 1px rgba(62, 240, 255, 0.4),
+    0 8px 28px rgba(62, 240, 255, 0.24);
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    filter 160ms ease;
+}
+
+.btn-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.75),
+    0 0 0 1px rgba(168, 248, 255, 0.85),
+    0 0 34px rgba(62, 240, 255, 0.62),
+    0 14px 36px rgba(62, 240, 255, 0.3);
+}
+
+.btn-primary:focus-visible {
+  outline: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    0 0 0 3px rgba(62, 240, 255, 0.5),
+    0 0 32px rgba(62, 240, 255, 0.45);
+}
+
+.btn-ghost {
+  cursor: pointer;
+  color: #d7f7ff;
+  background: rgba(62, 240, 255, 0.07);
+  border: 1px solid rgba(62, 240, 255, 0.38);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.btn-ghost:hover:not(:disabled) {
+  transform: translateY(-1px);
+  color: #f4fdff;
+  border-color: rgba(122, 246, 255, 0.85);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 26px rgba(62, 240, 255, 0.28);
+}
+
+.btn-ghost:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(62, 240, 255, 0.35);
+}
+
+.btn-primary:disabled,
+.btn-ghost:disabled {
+  cursor: not-allowed;
+  transform: none;
+  filter: none;
+  opacity: 0.42;
+  box-shadow: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -79,5 +193,11 @@ body {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .atmosphere::after,
+  .btn-primary:hover:not(:disabled),
+  .btn-ghost:hover:not(:disabled) {
+    transform: none;
   }
 }

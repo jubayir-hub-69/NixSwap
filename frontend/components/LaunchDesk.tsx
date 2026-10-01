@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { erc20Abi } from "viem";
 import { useAccount, useBalance, useReadContract, useReadContracts, useSwitchChain } from "wagmi";
@@ -19,12 +19,23 @@ const MAX_SUPPLY = 1_000_000_000_000n * 10n ** 18n;
 const LIQUIDITY_BPS = 200n;
 const BPS = 10_000n;
 
+function asUnits(value: unknown) {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number" && Number.isSafeInteger(value)) return BigInt(value);
+  if (typeof value === "string" && /^\d+$/.test(value)) return BigInt(value);
+  return undefined;
+}
+
+function byteLength(value: string) {
+  return new TextEncoder().encode(value).length;
+}
+
 function seedCapacity(data: unknown) {
   if (!data || typeof data !== "object") return undefined;
   const record = data as Record<string, unknown> & { 0?: unknown; 1?: unknown; 2?: unknown };
-  const seedNix = asBigint(record.seedNix ?? record[0]);
-  const available = asBigint(record.available ?? record[1]);
-  const launchesRemaining = asBigint(record.launchesRemaining ?? record[2]);
+  const seedNix = asUnits(record.seedNix ?? record[0]);
+  const available = asUnits(record.available ?? record[1]);
+  const launchesRemaining = asUnits(record.launchesRemaining ?? record[2]);
   if (seedNix === undefined || available === undefined || launchesRemaining === undefined) return undefined;
   return { seedNix, available, launchesRemaining };
 }
@@ -32,9 +43,9 @@ function seedCapacity(data: unknown) {
 function chainSlotsOf(data: unknown) {
   if (!data || typeof data !== "object") return undefined;
   const record = data as Record<string, unknown> & { 0?: unknown; 1?: unknown; 2?: unknown };
-  const slots = asBigint(record.slots ?? record[0]);
-  const bpsPerChain = asBigint(record.bpsPerChain ?? record[1]);
-  const creatorBps = asBigint(record.creatorBps ?? record[2]);
+  const slots = asUnits(record.slots ?? record[0]);
+  const bpsPerChain = asUnits(record.bpsPerChain ?? record[1]);
+  const creatorBps = asUnits(record.creatorBps ?? record[2]);
   if (slots === undefined || bpsPerChain === undefined || creatorBps === undefined) return undefined;
   return { slots, bpsPerChain, creatorBps };
 }
@@ -188,7 +199,7 @@ function LaunchCard({
         </div>
         <span className="rounded-full bg-white/5 px-2 py-1 text-[11px] text-mist">{badge}</span>
       </div>
-      <Link href={`/?token=${row.token}`} className="mt-2 mr-4 inline-block text-xs text-cyan-glow">
+      <Link href={`/swap?token=${row.token}`} className="mt-2 mr-4 inline-block text-xs text-cyan-glow">
         Trade
       </Link>
       <Link href={`/pool?token=${row.token}`} className="mt-2 inline-block text-xs text-cyan-glow">
@@ -206,7 +217,7 @@ function LaunchCard({
           <button
             type="button"
             data-testid="launch-relay"
-            className="mt-2 min-h-11 rounded-2xl border border-white/15 px-4 py-2 text-sm text-frost disabled:opacity-40"
+            className="btn-ghost mt-2 min-h-11 rounded-2xl px-4 py-2 text-sm"
             disabled={tx.pending || (Boolean(isConnected) && !canRelay)}
             onClick={() => {
               if (!isConnected) openConnectModal?.();
@@ -229,7 +240,7 @@ function LaunchCard({
 }
 
 export function LaunchDesk() {
-  const { address, isConnected } = useAccount();
+  const { address, chainId: walletChainId, isConnected } = useAccount();
   const { openConnectModal } = useConnectModal();
   const { switchChain, isPending: switching } = useSwitchChain();
   const launches = useLaunches();
@@ -282,14 +293,19 @@ export function LaunchDesk() {
   const [name, setName] = useState("");
   const [symbol, setSymbol] = useState("");
   const [supply, setSupply] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
   const [action, setAction] = useState<"create" | "retire" | null>(null);
+  const submitLock = useRef(false);
   const supplyRaw = /^\d+$/.test(supply) ? parseUnits(supply, 18) : supply === "" ? undefined : null;
-  const symbolOk = /^[A-Za-z0-9]{1,11}$/.test(symbol);
-  const nameOk = name.trim().length > 0 && name.trim().length <= 32;
-  const perChain =
-    supplyRaw && supplyRaw > 0n && bpsPerChain !== undefined ? (supplyRaw * bpsPerChain) / BPS : undefined;
+  const trimmedName = name.trim();
+  const trimmedSymbol = symbol.trim();
+  const nameOk = byteLength(trimmedName) > 0 && byteLength(trimmedName) <= 32;
+  const symbolOk = byteLength(trimmedSymbol) > 0 && byteLength(trimmedSymbol) <= 11;
+  const quotedBps = bpsPerChain ?? liquidityBps ?? LIQUIDITY_BPS;
+  const quotedPools = poolCount ?? (legacy ? 1n : 3n);
+  const perChain = supplyRaw && supplyRaw > 0n ? (supplyRaw * quotedBps) / BPS : undefined;
   const creatorPreview =
-    supplyRaw && perChain !== undefined && poolCount !== undefined ? supplyRaw - perChain * poolCount : undefined;
+    supplyRaw !== undefined && supplyRaw !== null && perChain !== undefined ? supplyRaw - perChain * quotedPools : undefined;
   const supplyOk =
     supplyRaw !== undefined &&
     supplyRaw !== null &&
@@ -302,31 +318,82 @@ export function LaunchDesk() {
   const seedReady = Boolean(seed && seed.launchesRemaining > 0n);
   const busy = tx.pending || switching;
   const blocked = launches.active.active;
+  const walletDeployment = deploymentFor(walletChainId);
+  const launchpadAddress = optionalAddress(walletDeployment, "NixLaunchpad");
+
+  function supplyError() {
+    if (supply === "") return "Enter a total supply, for example 10000000.";
+    if (supplyRaw === undefined || supplyRaw === null || supplyRaw <= 0n) return "Enter the supply as a whole number of tokens.";
+    if (supplyRaw > MAX_SUPPLY) return "Supply is above 1,000,000,000,000 tokens.";
+    if (!supplyOk) return "This supply is too small to fund a 2% pool on each chain and still pay the creator.";
+    return null;
+  }
 
   async function createToken() {
-    if (!launches.launchpad || !launches.chainId || !nameOk || !symbolOk || !supplyOk || !supplyRaw || !seedReady) {
-      return;
-    }
-    tx.clear();
-    setAction("create");
+    if (submitLock.current) return;
+    submitLock.current = true;
+    setFormError(null);
     try {
-      await tx.submit(() =>
-        tx.writeContractAsync({
-          address: launches.launchpad!,
-          abi: abis.NixLaunchpad,
-          functionName: "createToken",
-          args: [name.trim(), symbol.toUpperCase(), supplyRaw],
-          chainId: launches.chainId,
-        }),
-      );
-      setName("");
-      setSymbol("");
-      setSupply("");
-      await launches.refetch();
-    } catch (error) {
-      tx.fail(error instanceof Error ? error.message : "Launch failed.");
+      if (!isConnected) {
+        if (!openConnectModal) setFormError("Connect a wallet to create a token.");
+        else openConnectModal();
+        return;
+      }
+      if (!walletChainId || !walletDeployment || !launchpadAddress || !address) {
+        switchChain({ chainId: preferredChainId });
+        return;
+      }
+      if (!nameOk) {
+        setFormError("Enter a token name of 32 bytes or fewer.");
+        return;
+      }
+      if (!symbolOk) {
+        setFormError("Enter a symbol of 11 bytes or fewer.");
+        return;
+      }
+      const supplyProblem = supplyError();
+      if (supplyProblem || !supplyRaw) {
+        setFormError(supplyProblem ?? "Enter a total supply, for example 10000000.");
+        return;
+      }
+      if (blocked) {
+        setFormError("This wallet already has an active token. Retire it before creating another.");
+        return;
+      }
+      if (unwired) {
+        setFormError("This launchpad is not wired to 3 chains, so a launch cannot place every pool.");
+        return;
+      }
+      if (seed && !seedReady) {
+        setFormError("The launchpad seed reserve is empty, so new tokens cannot open a pool.");
+        return;
+      }
+      tx.clear();
+      setAction("create");
+      try {
+        await tx.submit(() =>
+          tx.writeContractAsync({
+            address: launchpadAddress,
+            abi: abis.NixLaunchpad,
+            functionName: "createToken",
+            args: [trimmedName, trimmedSymbol, supplyRaw],
+            account: address,
+            chainId: walletChainId,
+          }),
+        );
+        setName("");
+        setSymbol("");
+        setSupply("");
+        await launches.refetch();
+      } catch (error) {
+        const text = error instanceof Error ? error.message : "Launch failed.";
+        tx.fail(text);
+        setFormError(text);
+      } finally {
+        setAction(null);
+      }
     } finally {
-      setAction(null);
+      submitLock.current = false;
     }
   }
 
@@ -365,7 +432,7 @@ export function LaunchDesk() {
             : !termsReady
               ? "Reading the launch terms from this launchpad…"
               : unwired && slots
-                ? `This launchpad reports ${slots.slots.toString()} chain ${slots.slots === 1n ? "slot" : "slots"} and needs 3 before a launch can place liquidity on every network. Create stays off until the peers are wired.`
+                ? `This launchpad reports ${slots.slots.toString()} chain ${slots.slots === 1n ? "slot" : "slots"} and needs 3 before a launch can place liquidity on every network.`
                 : omnichain && slots
                   ? `Create token is one signature. Your wallet receives ${bpsLabel(slots.creatorBps)} on this network. Each of the ${slots.slots.toString()} networks opens a pool with ${bpsLabel(slots.bpsPerChain)} of supply${seed ? ` and ${formatUnits(seed.seedNix, 18, 0)} NIX` : ""}. Relay pays LayerZero so the other networks can deploy the token and add that liquidity. The solver sends relay and finishes those pools. ${seed ? `${seed.launchesRemaining.toString()} opening pools can still be funded here. ` : ""}One active launch per wallet.`
                   : legacy
@@ -390,9 +457,7 @@ export function LaunchDesk() {
             className="mt-4 space-y-3"
             onSubmit={(event) => {
               event.preventDefault();
-              if (!isConnected) openConnectModal?.();
-              else if (!deployment) switchChain({ chainId: preferredChainId });
-              else void createToken();
+              void createToken();
             }}
           >
             <label className="block text-xs text-mist">
@@ -401,7 +466,10 @@ export function LaunchDesk() {
                 data-testid="launch-name"
                 value={name}
                 maxLength={32}
-                onChange={(event) => setName(event.target.value)}
+                onChange={(event) => {
+                  setName(event.target.value);
+                  setFormError(null);
+                }}
                 className="mt-1 w-full rounded-2xl border border-white/10 bg-ink px-3 py-3 text-sm text-frost"
               />
             </label>
@@ -411,7 +479,10 @@ export function LaunchDesk() {
                 data-testid="launch-symbol"
                 value={symbol}
                 maxLength={11}
-                onChange={(event) => setSymbol(event.target.value.toUpperCase())}
+                onChange={(event) => {
+                  setSymbol(event.target.value.toUpperCase());
+                  setFormError(null);
+                }}
                 className="mt-1 w-full rounded-2xl border border-white/10 bg-ink px-3 py-3 text-sm text-frost"
               />
             </label>
@@ -423,17 +494,22 @@ export function LaunchDesk() {
                 inputMode="numeric"
                 placeholder="0"
                 aria-label="Total supply"
-                onChange={(event) => setSupply(event.target.value.replace(/\D/g, ""))}
+                onChange={(event) => {
+                  setSupply(event.target.value.replace(/\D/g, ""));
+                  setFormError(null);
+                }}
                 className="w-full bg-transparent text-3xl text-frost outline-none placeholder:text-white/20"
               />
             </label>
-            {creatorPreview !== undefined && perChain !== undefined && perChain > 0n && poolCount !== undefined ? (
+            {supplyOk && creatorPreview !== undefined && perChain !== undefined ? (
               <p className="text-xs text-mist">
-                Your wallet receives {formatUnits(creatorPreview, 18)} {symbol || "tokens"} on this network.{" "}
-                {poolCount === 1n
+                Your wallet receives {formatUnits(creatorPreview, 18)} {trimmedSymbol || "tokens"} on this network.{" "}
+                {quotedPools === 1n
                   ? `The opening pool receives ${formatUnits(perChain, 18)}${seed ? ` paired with ${formatUnits(seed.seedNix, 18, 0)} NIX` : ""}.`
-                  : `Each of the ${poolCount.toString()} networks pairs ${formatUnits(perChain, 18)}${seed ? ` with ${formatUnits(seed.seedNix, 18, 0)} NIX` : ""}.`}
+                  : `Each of the ${quotedPools.toString()} networks pairs ${formatUnits(perChain, 18)}${seed ? ` with ${formatUnits(seed.seedNix, 18, 0)} NIX` : ""}.`}
               </p>
+            ) : supply !== "" ? (
+              <p className="text-xs text-rose-300">{supplyError()}</p>
             ) : null}
             {seedQuery.isError ? (
               <p className="text-xs text-rose-300">This launchpad cannot seed a pool yet.</p>
@@ -450,19 +526,12 @@ export function LaunchDesk() {
               type="submit"
               data-testid="launch-action"
               aria-busy={action === "create" && tx.pending}
-              disabled={
-                Boolean(isConnected && deployment) &&
-                (busy ||
-                  blocked ||
-                  !nameOk ||
-                  !symbolOk ||
-                  !supplyOk ||
-                  seedQuery.isLoading ||
-                  !seedReady ||
-                  !termsReady ||
-                  unwired)
-              }
-              className="min-h-12 w-full rounded-2xl bg-cyan-glow px-4 py-3 text-sm font-semibold text-void disabled:opacity-40"
+              disabled={busy}
+              onClick={(event) => {
+                event.preventDefault();
+                void createToken();
+              }}
+              className="btn-primary min-h-12 w-full rounded-2xl px-4 py-3 text-sm font-semibold"
             >
               <TxButtonContent
                 pending={action === "create" && tx.pending}
@@ -488,6 +557,11 @@ export function LaunchDesk() {
                 }
               />
             </button>
+            {formError ? (
+              <p className="text-xs text-rose-300" data-testid="launch-error">
+                {formError}
+              </p>
+            ) : null}
             {blocked ? (
               <button
                 type="button"
@@ -495,7 +569,7 @@ export function LaunchDesk() {
                 aria-busy={action === "retire" && tx.pending}
                 disabled={busy}
                 onClick={() => void retire()}
-                className="min-h-11 w-full rounded-2xl border border-white/15 px-4 py-3 text-sm text-frost disabled:opacity-40"
+                className="btn-ghost min-h-11 w-full rounded-2xl px-4 py-3 text-sm"
               >
                 <TxButtonContent pending={action === "retire" && tx.pending} phase={tx.phase} idle="Retire active launch" />
               </button>

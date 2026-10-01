@@ -566,7 +566,7 @@ export function IntentForm({
               disabled={busy}
               onClick={() => void whitelist()}
               aria-busy={action === "whitelist" && tx.pending}
-              className="h-11 w-full rounded-2xl border border-cyan-glow/40 text-sm font-semibold text-cyan-glow disabled:opacity-40"
+              className="btn-ghost h-11 w-full rounded-2xl text-sm font-semibold"
             >
               <TxButtonContent pending={action === "whitelist" && tx.pending} phase={tx.phase} idle="Whitelist solver" />
             </button>
@@ -576,7 +576,7 @@ export function IntentForm({
             data-testid="swap-action"
             aria-busy={action === "trade" && tx.pending}
             disabled={isConnected && deployment ? allowance.isLoading || !(needsApproval || canSubmit) || busy : busy}
-            className="min-h-12 w-full rounded-2xl bg-cyan-glow px-4 py-3 text-sm font-semibold text-void shadow-glow disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
+            className="btn-primary min-h-12 w-full rounded-2xl px-4 py-3 text-sm font-semibold"
           >
             <TxButtonContent pending={action === "trade" && tx.pending} phase={tx.phase} idle={label} />
           </button>

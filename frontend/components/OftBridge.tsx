@@ -15,8 +15,7 @@ import { addressFromPeer, bridgeChain, bridgeChains, parseWalletAddress } from "
 import { errorText, liveReadQuery, preferredChainId } from "@/lib/deployment";
 
 const fieldClass = "mt-1 w-full rounded-2xl border border-white/10 bg-ink px-3 py-3 text-sm text-frost";
-const buttonClass =
-  "min-h-12 w-full rounded-2xl bg-cyan-glow px-4 py-3 text-sm font-semibold text-void shadow-glow disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none";
+const buttonClass = "btn-primary min-h-12 w-full rounded-2xl px-4 py-3 text-sm font-semibold";
 
 export function OftBridge() {
   const { address, isConnected } = useAccount();

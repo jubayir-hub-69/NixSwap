@@ -9,18 +9,19 @@ import { Logo } from "@/components/Logo";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 const links = [
-  { href: "/", label: "Dashboard" },
   { href: "/swap", label: "Swap" },
   { href: "/bridge", label: "Bridge" },
   { href: "/portfolio", label: "Portfolio" },
   { href: "/markets", label: "Markets" },
-  { href: "/docs", label: "Docs" },
-];
-
-const more = [
   { href: "/launch", label: "Launch" },
   { href: "/pool", label: "Pool" },
 ];
+
+const more = [{ href: "/docs", label: "Docs" }];
+
+function isActive(pathname: string, href: string) {
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
 
 function NavLinks({
   pathname,
@@ -31,17 +32,18 @@ function NavLinks({
   onNavigate?: () => void;
   className: string;
 }) {
+  const moreActive = more.some((link) => isActive(pathname, link.href));
   return (
     <div className={className}>
       {links.map((link) => {
-        const active = link.href === "/" ? pathname === "/" : pathname === link.href || pathname.startsWith(`${link.href}/`);
+        const active = isActive(pathname, link.href);
         return (
           <Link
             key={link.href}
             href={link.href}
             onClick={onNavigate}
             data-testid={`nav-${link.label.toLowerCase()}`}
-            className={`rounded-full px-2.5 py-1.5 text-sm transition ${
+            className={`shrink-0 rounded-full px-2 py-1.5 text-sm transition ${
               active
                 ? "bg-cyan-glow/10 text-cyan-glow shadow-[inset_0_0_0_1px_rgba(62,240,255,0.28)]"
                 : "text-mist hover:bg-white/5 hover:text-frost"
@@ -53,8 +55,11 @@ function NavLinks({
       })}
       <DropdownMenu>
         <DropdownMenuTrigger
-          className="rounded-full px-2.5 py-1.5 text-left text-sm text-mist outline-none hover:bg-white/5 hover:text-frost data-[state=open]:text-frost"
+          className={`shrink-0 rounded-full px-2 py-1.5 text-left text-sm outline-none hover:bg-white/5 hover:text-frost data-[state=open]:text-frost ${
+            moreActive ? "bg-cyan-glow/10 text-cyan-glow shadow-[inset_0_0_0_1px_rgba(62,240,255,0.28)]" : "text-mist"
+          }`}
           data-testid="nav-more"
+          type="button"
         >
           More
         </DropdownMenuTrigger>
@@ -82,12 +87,12 @@ export function Navbar() {
         <Logo />
         <NavLinks
           pathname={pathname}
-          className="hidden items-center gap-1 md:flex"
+          className="hidden min-w-0 flex-1 items-center gap-0.5 overflow-x-auto md:flex"
         />
         <div className="flex items-center gap-2">
           <button
             type="button"
-            className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 text-frost md:hidden"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-cyan-glow/25 text-frost transition hover:border-cyan-glow/70 hover:text-cyan-glow md:hidden"
             aria-expanded={open}
             aria-label={open ? "Close menu" : "Open menu"}
             data-testid="mobile-menu"

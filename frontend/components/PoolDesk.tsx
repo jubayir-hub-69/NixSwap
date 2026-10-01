@@ -362,7 +362,7 @@ export function PoolDesk() {
                 Boolean(isConnected && deployment) &&
                 (busy || !quoted || allowanceLoading || balanceLoading || balanceProblem || shortNix || shortToken)
               }
-              className="min-h-12 w-full rounded-2xl bg-cyan-glow px-4 py-3 text-sm font-semibold text-void disabled:opacity-40"
+              className="btn-primary min-h-12 w-full rounded-2xl px-4 py-3 text-sm font-semibold"
             >
               <TxButtonContent pending={action === "deposit" && tx.pending} phase={tx.phase} idle={depositLabel} />
             </button>
@@ -402,7 +402,7 @@ export function PoolDesk() {
               data-testid="withdraw-action"
               aria-busy={action === "withdraw" && tx.pending}
               disabled={!pair || busy || !shareRaw}
-              className="min-h-12 w-full rounded-2xl border border-cyan-glow/40 px-4 py-3 text-sm font-semibold text-cyan-glow disabled:opacity-40"
+              className="btn-ghost min-h-12 w-full rounded-2xl px-4 py-3 text-sm font-semibold"
             >
               <TxButtonContent pending={action === "withdraw" && tx.pending} phase={tx.phase} idle="Withdraw liquidity" />
             </button>
