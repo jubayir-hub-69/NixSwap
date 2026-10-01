@@ -6,14 +6,20 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { FaucetButton } from "@/components/FaucetButton";
 import { Logo } from "@/components/Logo";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 const links = [
-  { href: "/markets", label: "Markets" },
-  { href: "/", label: "Swap" },
-  { href: "/pool", label: "Pool" },
-  { href: "/launch", label: "Launch" },
+  { href: "/", label: "Dashboard" },
+  { href: "/swap", label: "Swap" },
   { href: "/bridge", label: "Bridge" },
   { href: "/portfolio", label: "Portfolio" },
+  { href: "/markets", label: "Markets" },
+  { href: "/docs", label: "Docs" },
+];
+
+const more = [
+  { href: "/launch", label: "Launch" },
+  { href: "/pool", label: "Pool" },
 ];
 
 function NavLinks({
@@ -28,7 +34,7 @@ function NavLinks({
   return (
     <div className={className}>
       {links.map((link) => {
-        const active = pathname === link.href;
+        const active = link.href === "/" ? pathname === "/" : pathname === link.href || pathname.startsWith(`${link.href}/`);
         return (
           <Link
             key={link.href}
@@ -45,6 +51,23 @@ function NavLinks({
           </Link>
         );
       })}
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          className="rounded-full px-2.5 py-1.5 text-left text-sm text-mist outline-none hover:bg-white/5 hover:text-frost data-[state=open]:text-frost"
+          data-testid="nav-more"
+        >
+          More
+        </DropdownMenuTrigger>
+        <DropdownMenuContent>
+          {more.map((link) => (
+            <DropdownMenuItem key={link.href} asChild>
+              <Link href={link.href} onClick={onNavigate} data-testid={`nav-${link.label.toLowerCase()}`}>
+                {link.label}
+              </Link>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

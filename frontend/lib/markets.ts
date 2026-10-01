@@ -121,6 +121,28 @@ export function quoteSwap(amountIn: bigint, reserveIn: bigint, reserveOut: bigin
   return amountOut;
 }
 
+/** How far the constant-product fill sits from the spot quote, in basis points. */
+export function priceImpactBps(amountIn: bigint, reserveIn: bigint, reserveOut: bigint, amountOut: bigint) {
+  if (amountIn <= 0n || reserveIn <= 0n || reserveOut <= 0n || amountOut <= 0n) return null;
+  const spotOut = (reserveOut * amountIn) / reserveIn;
+  if (spotOut <= 0n) return null;
+  if (amountOut >= spotOut) return 0;
+  const bps = Number(((spotOut - amountOut) * 10000n) / spotOut);
+  return Number.isFinite(bps) ? bps : null;
+}
+
+/** Minimum output after a user slippage tolerance. 100 bps is 1%. */
+export function minOutAfterSlippage(amountOut: bigint, slippageBps: number) {
+  if (amountOut <= 0n || !Number.isInteger(slippageBps) || slippageBps < 0 || slippageBps >= 10000) return null;
+  const next = (amountOut * BigInt(10000 - slippageBps)) / 10000n;
+  return next > 0n ? next : null;
+}
+
+export function formatImpact(bps: number | null) {
+  if (bps === null) return "Unavailable";
+  return `${(bps / 100).toFixed(2)}%`;
+}
+
 /** Local preview of NixPair.addLiquidity. Deposit amounts are public; this does not quote a swap. */
 export function quoteAdd(
   nixAmount: bigint,

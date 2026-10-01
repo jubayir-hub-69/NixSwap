@@ -46,6 +46,12 @@ const explorers: Record<number, string> = {
   11155111: "https://sepolia.etherscan.io",
 };
 
+export function addressUrl(chainId: number | undefined, address: string) {
+  if (chainId === undefined || !/^0x[0-9a-fA-F]{40}$/.test(address)) return undefined;
+  const base = explorers[chainId];
+  return base ? `${base}/address/${address}` : undefined;
+}
+
 export function transactionUrl(chainId: number | undefined, hash: string) {
   if (chainId === undefined) return undefined;
   const base = explorers[chainId];

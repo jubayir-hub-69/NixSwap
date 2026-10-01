@@ -3,7 +3,10 @@ import path from "node:path";
 import {
   AbiCoder,
   Contract,
+  formatEther,
+  id,
   JsonRpcProvider,
+  parseEther,
   Wallet,
   ZeroHash,
   zeroPadValue,
@@ -85,6 +88,80 @@ function providerFor(chainId: number) {
   return provider;
 }
 
+const NIX_ID = id("NIX");
+
+function decimalAmount(name: string, raw: string | undefined, fallback: string) {
+  const value = raw?.trim() || fallback;
+  if (!/^\d+(\.\d+)?$/.test(value)) {
+    throw new Error(`${name} must be a decimal NIX amount.`);
+  }
+  return parseEther(value);
+}
+
+function savedNix(chainId: number) {
+  const jsonPath = path.join(process.cwd(), "frontend", "config", "deployments.json");
+  if (!existsSync(jsonPath)) return undefined;
+  const parsed = JSON.parse(readFileSync(jsonPath, "utf8")) as Record<string, { NixToken?: string }>;
+  const value = parsed[String(chainId)]?.NixToken;
+  if (typeof value === "string" && /^0x[0-9a-fA-F]{40}$/.test(value)) return value;
+  return undefined;
+}
+
+/// Tops up NIX escrow from the solver wallet on this chain. Lock-and-release cannot mint, and
+/// escrow on one chain cannot be pulled across to another. The wallet has to already hold NIX here.
+async function rebalanceNixEscrow(target: BridgeTarget, bridgeAddress: string) {
+  const nixAddress = savedNix(target.chainId);
+  if (!nixAddress) return;
+  const goal = decimalAmount("BRIDGE_ESCROW_TARGET", process.env.BRIDGE_ESCROW_TARGET, "1000");
+  const reserve = decimalAmount("BRIDGE_REBALANCE_RESERVE", process.env.BRIDGE_REBALANCE_RESERVE, "0");
+  const bridge = new Contract(
+    bridgeAddress,
+    ["function accounted(bytes32 tokenId) view returns (uint256)", "function deposit(bytes32 tokenId, uint256 amount) returns (uint256)"],
+    target.signer,
+  );
+  const nix = new Contract(
+    nixAddress,
+    [
+      "function balanceOf(address account) view returns (uint256)",
+      "function allowance(address owner, address spender) view returns (uint256)",
+      "function approve(address spender, uint256 amount) returns (bool)",
+    ],
+    target.signer,
+  );
+  const signer = await target.signer.getAddress();
+  const accounted = BigInt(await bridge.accounted(NIX_ID));
+  if (accounted >= goal) return;
+  const balance = BigInt(await nix.balanceOf(signer));
+  const spendable = balance > reserve ? balance - reserve : 0n;
+  const key = `rebalance-empty:${target.chainId}`;
+  if (spendable === 0n) {
+    if (!noted.has(key)) {
+      noted.add(key);
+      console.log(
+        `[${target.name}] NIX escrow holds ${formatEther(accounted)} and the target is ${formatEther(goal)}. The solver wallet holds ${formatEther(balance)} NIX on this chain, so it cannot deposit the difference.`,
+      );
+    }
+    return;
+  }
+  const amount = spendable < goal - accounted ? spendable : goal - accounted;
+  const allowance = BigInt(await nix.allowance(signer, bridgeAddress));
+  if (allowance < amount) {
+    const approval = await nix.approve(bridgeAddress, amount);
+    const approvalReceipt = await approval.wait(target.confirms);
+    if (!approvalReceipt || approvalReceipt.status !== 1) {
+      throw new Error("NIX approval for the escrow deposit did not confirm.");
+    }
+  }
+  const tx = await bridge.deposit(NIX_ID, amount);
+  const receipt = await tx.wait(target.confirms);
+  if (!receipt || receipt.status !== 1) {
+    throw new Error("NIX escrow deposit did not confirm.");
+  }
+  noted.delete(key);
+  noted.delete(`rebalance-error:${target.chainId}`);
+  console.log(`[${target.name}] Deposited ${formatEther(amount)} NIX into bridge escrow. ${receipt.hash}`);
+}
+
 export async function retryInboundBridges(target: BridgeTarget) {
   const bridges = savedBridges();
   const localAddress = bridges.get(target.chainId);
@@ -94,6 +171,16 @@ export async function retryInboundBridges(target: BridgeTarget) {
       console.log(`[${target.name}] No NixBridge is deployed on this chain. Bridge retry is idle.`);
     }
     return;
+  }
+
+  try {
+    await rebalanceNixEscrow(target, localAddress);
+  } catch (error) {
+    const key = `rebalance-error:${target.chainId}`;
+    if (!noted.has(key)) {
+      noted.add(key);
+      console.log(`[${target.name}] NIX escrow was not topped up. ${detail(error)}`);
+    }
   }
 
   const local = new Contract(localAddress, BRIDGE_ABI, target.signer);

@@ -4,6 +4,7 @@ import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { useMemo, useState } from "react";
 import { useAccount, useBalance, useReadContract, useReadContracts, useSwitchChain } from "wagmi";
 import { abis } from "@/config/contracts";
+import { RouteCard } from "@/components/RouteCard";
 import { TxButtonContent } from "@/components/TxButton";
 import { TxNotice } from "@/components/TxNotice";
 import { useChainTx } from "@/hooks/useChainTx";
@@ -42,11 +43,14 @@ export function OftBridge() {
     query: { enabled: Boolean(launches.chainId && launches.rows.length > 0), ...liveReadQuery },
   });
   const oftRows = useMemo(() => {
+    if (!source) return [];
     return launches.rows.filter((row, index) => {
       const item = eidQuery.data?.[index];
-      return item?.status === "success" && Number(item.result) === source?.eid;
+      // A launch is listed as soon as the launchpad returns it. Hide it only after its endpoint id is known and does not match.
+      if (!item || item.status !== "success") return true;
+      return Number(item.result) === source.eid;
     });
-  }, [eidQuery.data, launches.rows, source?.eid]);
+  }, [eidQuery.data, launches.rows, source]);
   const selected = oftRows.find((row) => row.token === tokenChoice) ?? oftRows[0];
   const balance = useErc20Balance(selected?.token, address, source?.chainId);
   const parsed = selected ? parseUnits(amount, balance.decimals) : null;
@@ -87,7 +91,7 @@ export function OftBridge() {
     query: { enabled: Boolean(address && source && quoteEnabled), ...liveReadQuery },
   });
 
-  const eidPending = launches.rows.length > 0 && (eidQuery.isLoading || eidQuery.data === undefined);
+  const eidPending = launches.rows.length > 0 && oftRows.length === 0 && (eidQuery.isLoading || eidQuery.data === undefined);
   let status: string | null = null;
   let blocker: string | null = null;
   if (!isConnected || !address) status = null;
@@ -245,6 +249,17 @@ export function OftBridge() {
               : ""
             : `You pay ${formatUnits(feeValue, 18, 8)} ETH. Extra above the quote is refunded.`}
         </p>
+        <RouteCard
+          testId="oft-route"
+          mode="Burn and mint"
+          from={source?.name}
+          to={destination?.name}
+          fromChainId={source?.chainId}
+          token={selected?.symbol}
+          amount={parsed ? formatUnits(parsed, balance.decimals) : undefined}
+          quotedFee={fee !== undefined ? `${formatUnits(fee, 18, 8)} ETH` : undefined}
+          walletFee={feeValue !== undefined ? `${formatUnits(feeValue, 18, 8)} ETH` : undefined}
+        />
         {status ? <p className="min-h-5 text-xs leading-5 text-mist">{status}</p> : null}
         <p className="min-h-5 text-xs leading-5 text-rose-300" data-testid="oft-error">
           {blocker ?? ""}

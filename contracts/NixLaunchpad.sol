@@ -40,6 +40,8 @@ contract NixLaunchpad is Ownable, ReentrancyGuard {
         address creator;
         string name;
         string symbol;
+        /// @dev Shared cap for the whole launch. It is not the amount minted on this chain.
+        ///      Source `totalSupply` is 94% plus this chain's 2%. Each other chain mints only its 2%.
         uint256 supply;
         uint64 createdAt;
         bool active;
@@ -263,7 +265,8 @@ contract NixLaunchpad is Ownable, ReentrancyGuard {
     }
 
     /// @notice Deploys the source token, mints 94% to the caller, and seeds this chain's pair
-    ///         with 2% plus `SEED_NIX`. The other 4% is minted by the peer launchpads after `relay`.
+    ///         with 2% plus `SEED_NIX`. The other 4% is minted later, 2% on each peer, and nowhere
+    ///         is the shared cap minted a second time.
     function createToken(string calldata name_, string calldata symbol_, uint256 supply)
         external
         returns (uint256 id, address token, address pair)
@@ -273,6 +276,7 @@ contract NixLaunchpad is Ownable, ReentrancyGuard {
         LaunchToken created = LaunchToken(
             factory.deployToken(name_, symbol_, creatorAmount, liquidityTokens, msg.sender, address(endpoint), localEid)
         );
+        _requireLocalMint(created, msg.sender, creatorAmount, liquidityTokens, supply);
         NixPair createdPair = NixPair(factory.deployPair(nix, IERC20(address(created))));
         id = _record(address(created), address(createdPair), name_, symbol_, supply, msg.sender, true, false);
         _seed(created, createdPair, liquidityTokens);
@@ -369,7 +373,8 @@ contract NixLaunchpad is Ownable, ReentrancyGuard {
         _authorize(origin.srcEid, message);
     }
 
-    /// @notice Deploys the authorized peer token and seeds its NIX pair. Anyone can call it.
+    /// @notice Deploys the authorized peer token and seeds its NIX pair with that chain's 2%.
+    ///         The new token's `totalSupply` is only that pool share. The shared cap stays on the source record.
     function finalizeRemote(uint32 srcEid, uint256 srcId) external nonReentrant returns (address token, address pair) {
         RemoteOrder storage order = _orders[srcEid][srcId];
         if (!order.authorized) revert UnknownToken(srcId);
@@ -377,10 +382,13 @@ contract NixLaunchpad is Ownable, ReentrancyGuard {
         uint256 available = nix.balanceOf(address(this));
         if (available < SEED_NIX) revert InsufficientSeed(available, SEED_NIX);
 
+        uint256 liquidity = _perChain(order.supply);
+        if (liquidity != order.liquidity || liquidity >= order.supply) revert InvalidSupply();
         bytes32 salt = keccak256(abi.encode(srcEid, srcId));
         LaunchToken created = LaunchToken(
-            factory.deployRemoteToken(salt, order.name, order.symbol, order.liquidity, address(endpoint), localEid)
+            factory.deployRemoteToken(salt, order.name, order.symbol, liquidity, address(endpoint), localEid)
         );
+        if (created.totalSupply() != liquidity || created.balanceOf(address(this)) != liquidity) revert InvalidSupply();
         if (address(created) != order.predicted) revert UnexpectedToken(address(created), order.predicted);
         created.setPeer(srcEid, bytes32(uint256(uint160(order.sourceToken))));
 
@@ -473,6 +481,21 @@ contract NixLaunchpad is Ownable, ReentrancyGuard {
         uint256 symbolLength = bytes(symbol_).length;
         if (nameLength == 0 || nameLength > 32) revert InvalidName();
         if (symbolLength == 0 || symbolLength > 11) revert InvalidSymbol();
+    }
+
+    /// @dev A source launch mints the creator share plus one pool share, which is less than the cap.
+    ///      A remote launch never reaches this helper with a creator balance.
+    function _requireLocalMint(
+        LaunchToken created,
+        address creator,
+        uint256 creatorAmount,
+        uint256 liquidityTokens,
+        uint256 supply
+    ) internal view {
+        if (created.totalSupply() != creatorAmount + liquidityTokens) revert InvalidSupply();
+        if (created.balanceOf(creator) != creatorAmount) revert InvalidSupply();
+        if (created.balanceOf(address(this)) != liquidityTokens) revert InvalidSupply();
+        if (created.totalSupply() >= supply) revert InvalidSupply();
     }
 
     function _split(uint256 supply) internal pure returns (uint256 creatorAmount, uint256 liquidityTokens) {

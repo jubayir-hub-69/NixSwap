@@ -1,18 +1,24 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useAccount, useChainId, useReadContract, useReadContracts } from "wagmi";
+import { useMemo, useSyncExternalStore } from "react";
+import { useAccount, useChainId, useReadContract, useReadContracts, useWatchContractEvent } from "wagmi";
 import { abis } from "@/config/contracts";
 import { deploymentFor, liveReadQuery, optionalAddress, readChainId } from "@/lib/deployment";
 import { parseActiveLaunch, parseLaunch, parseLaunches, type LaunchRow } from "@/lib/markets";
 
+function subscribeHydration() {
+  return () => {};
+}
+
+/** False during server render and hydration, then true. Keeps the first chain read off the server snapshot. */
+function useHydrated() {
+  return useSyncExternalStore(subscribeHydration, () => true, () => false);
+}
+
 export function useLaunches() {
   const account = useAccount();
   const fallbackChainId = useChainId();
-  const [ready, setReady] = useState(false);
-  useEffect(() => {
-    setReady(true);
-  }, []);
+  const ready = useHydrated();
   const chainId = ready ? readChainId(account.chainId, fallbackChainId) : undefined;
   const deployment = deploymentFor(chainId);
   const launchpad = optionalAddress(deployment, "NixLaunchpad");
@@ -70,6 +76,27 @@ export function useLaunches() {
     args: account.address ? [account.address] : undefined,
     chainId,
     query: { enabled: Boolean(launchpad && account.address && chainId), ...liveReadQuery },
+  });
+
+  function refreshLaunches() {
+    void Promise.all([countQuery.refetch(), allQuery.refetch(), infoQuery.refetch()]);
+  }
+
+  useWatchContractEvent({
+    address: launchpad,
+    abi: abis.NixLaunchpad,
+    eventName: "TokenLaunched",
+    chainId,
+    enabled: Boolean(launchpad && chainId),
+    onLogs: refreshLaunches,
+  });
+  useWatchContractEvent({
+    address: launchpad,
+    abi: abis.NixLaunchpad,
+    eventName: "RemoteLaunchSeeded",
+    chainId,
+    enabled: Boolean(launchpad && chainId),
+    onLogs: refreshLaunches,
   });
 
   const countPending = enabled && count === undefined && !countQuery.isError && rows.length === 0;

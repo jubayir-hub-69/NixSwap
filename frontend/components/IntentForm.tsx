@@ -4,18 +4,19 @@ import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
 import { isAddress, maxUint256 } from "viem";
-import { useAccount, useBlock, useReadContract, useSwitchChain } from "wagmi";
+import { useAccount, useBlock, useEstimateFeesPerGas, useReadContract, useSwitchChain } from "wagmi";
 import { abis } from "@/config/contracts";
 import { TxButtonContent } from "@/components/TxButton";
 import { TxNotice } from "@/components/TxNotice";
+import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { useChainTx } from "@/hooks/useChainTx";
 import { useErc20Balance } from "@/hooks/useErc20Balance";
 import { useFhenix } from "@/hooks/useFhenix";
 import { useLaunches } from "@/hooks/useLaunches";
 import { useMarketQuotes } from "@/hooks/useMarketQuotes";
-import { asBigint, asNumber, decimalInput, formatBalance, formatUnits, parseUnits } from "@/lib/amount";
+import { asBigint, asNumber, decimalInput, formatBalance, formatUnits, parseUnits, plainUnits } from "@/lib/amount";
 import { deployedChains, preferredChainId } from "@/lib/deployment";
-import { formatPrice, nixPairFor, quoteSwap } from "@/lib/markets";
+import { formatImpact, formatPrice, minOutAfterSlippage, nixPairFor, priceImpactBps, quoteSwap } from "@/lib/markets";
 
 const fieldClass =
   "w-full bg-transparent text-2xl font-medium tracking-tight text-frost outline-none placeholder:text-white/20 sm:text-3xl";
@@ -45,8 +46,11 @@ export function IntentForm({
   const [solver, setSolver] = useState("");
   const [solverTouched, setSolverTouched] = useState(false);
   const [minutes, setMinutes] = useState("30");
+  const [slippageBps, setSlippageBps] = useState(50);
+  const [limitTouched, setLimitTouched] = useState(false);
   const [action, setAction] = useState<"trade" | "whitelist" | null>(null);
   const block = useBlock({ chainId: walletChainId, query: { enabled: Boolean(deployment && walletChainId) } });
+  const gas = useEstimateFeesPerGas({ chainId: walletChainId, query: { enabled: Boolean(walletChainId) } });
   const targetChain = deployedChains.some((chain) => chain.chainId === walletChainId) ? walletChainId : undefined;
 
   const options = useMemo(() => {
@@ -118,7 +122,6 @@ export function IntentForm({
   const places = asNumber(publicDecimals.data) ?? 18;
   const amountRaw = parseUnits(amount, CONFIDENTIAL_DECIMALS);
   const publicAmount = parseUnits(amount, places);
-  const limitRaw = parseUnits(limit, CONFIDENTIAL_DECIMALS);
   const windowSeconds = asBigint(maxWindow.data);
   const minuteCount = Number(minutes);
   const expiresAt =
@@ -134,16 +137,25 @@ export function IntentForm({
   const allowed = asBigint(allowance.data);
   const needsApproval = Boolean(publicAmount && publicAmount > 0n && (allowed === undefined || allowed < publicAmount));
   const isOwner = Boolean(address && owner.data && address.toLowerCase() === String(owner.data).toLowerCase());
-  const publicLimit = parseUnits(limit, places);
+  const reserveIn = quote?.ready ? (sellingNix ? quote.reserveNix : quote.reserveToken) : undefined;
+  const reserveOut = quote?.ready ? (sellingNix ? quote.reserveToken : quote.reserveNix) : undefined;
   const poolOut =
-    quote?.ready && publicAmount && publicAmount > 0n
-      ? quoteSwap(
-          publicAmount,
-          sellingNix ? quote.reserveNix : quote.reserveToken,
-          sellingNix ? quote.reserveToken : quote.reserveNix,
-        )
+    quote?.ready && publicAmount && publicAmount > 0n && reserveIn !== undefined && reserveOut !== undefined
+      ? quoteSwap(publicAmount, reserveIn, reserveOut)
       : null;
+  const impact =
+    poolOut && publicAmount && publicAmount > 0n && reserveIn !== undefined && reserveOut !== undefined
+      ? priceImpactBps(publicAmount, reserveIn, reserveOut, poolOut)
+      : null;
+  const suggested = poolOut ? minOutAfterSlippage(poolOut, slippageBps) : null;
+  const confidentialStep = 10n ** BigInt(Math.max(places - CONFIDENTIAL_DECIMALS, 0));
+  const floored = suggested && suggested >= confidentialStep ? (suggested / confidentialStep) * confidentialStep : null;
+  const suggestedText = floored ? plainUnits(floored, places) : "";
+  const limitShown = !limitTouched && suggestedText ? suggestedText : limit;
+  const limitRaw = parseUnits(limitShown, CONFIDENTIAL_DECIMALS);
+  const publicLimit = parseUnits(limitShown, places);
   const abovePool = Boolean(poolOut && publicLimit && publicLimit > poolOut);
+  const gasPrice = gas.data?.maxFeePerGas ?? gas.data?.gasPrice;
   const shortPay = Boolean(
     publicAmount && publicAmount > 0n && payBalance.value !== undefined && publicAmount > payBalance.value,
   );
@@ -253,7 +265,7 @@ export function IntentForm({
   else if (!deployment || !targetChain) label = switching ? "Switching network…" : "Switch network";
   else if (maxWindow.isLoading || allowance.isLoading) label = "Reading contracts…";
   else if (!routeReady) label = "Choose two tokens";
-  else if (!amount || !limit) label = "Enter amount and minimum";
+  else if (!amount || !limitShown) label = "Enter amount and minimum";
   else if (amountRaw === null || limitRaw === null || amountRaw === 0n || limitRaw === 0n || publicAmount === null) {
     label = "Check the amounts";
   } else if (payBalance.loading) label = "Reading balance…";
@@ -306,7 +318,51 @@ export function IntentForm({
               {deployment && !launches.launchpad ? " · launchpad deploy pending" : ""}
             </p>
           </div>
-          <p className="rounded-full bg-cyan-glow/10 px-3 py-1 text-xs text-cyan-glow">Shielded</p>
+          <div className="flex items-center gap-2">
+            <p className="rounded-full bg-cyan-glow/10 px-3 py-1 text-xs text-cyan-glow">Shielded</p>
+            <Dialog>
+              <DialogTrigger className="rounded-full border border-white/10 px-3 py-1 text-xs text-frost" data-testid="swap-settings">
+                Settings
+              </DialogTrigger>
+              <DialogContent title="Swap settings">
+                <label className="block text-xs text-mist">
+                  Solver
+                  <input
+                    data-testid="solver-input"
+                    value={solverValue}
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="0x"
+                    onChange={(event) => {
+                      setSolverTouched(true);
+                      setSolver(event.target.value.trim());
+                    }}
+                    className="mt-1 w-full rounded-2xl border border-white/10 bg-ink px-3 py-3 font-mono text-sm text-frost"
+                  />
+                </label>
+                <label className="mt-3 block text-xs text-mist">
+                  Expiry in minutes
+                  {windowSeconds !== undefined ? ` (window ${Number(windowSeconds) / 60} min)` : ""}
+                  <input
+                    data-testid="expiry-input"
+                    value={minutes}
+                    inputMode="numeric"
+                    onChange={(event) => setMinutes(event.target.value.replace(/\D/g, ""))}
+                    className="mt-1 w-full rounded-2xl border border-white/10 bg-ink px-3 py-3 text-sm text-frost"
+                  />
+                </label>
+                {solverAddress ? (
+                  <p className="mt-3 text-xs text-mist" data-testid="solver-status">
+                    {solverAllowed.isLoading
+                      ? "Checking solver…"
+                      : solverAllowed.data
+                        ? "Solver is whitelisted."
+                        : "Solver is not whitelisted on IntentRegistry."}
+                  </p>
+                ) : null}
+              </DialogContent>
+            </Dialog>
+          </div>
         </div>
 
         <form
@@ -319,14 +375,31 @@ export function IntentForm({
             else if (canSubmit) void submitIntent();
           }}
         >
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block text-xs text-mist">
-              Pay
+          <label className="field-well block rounded-3xl px-4 py-3">
+            <span className="mb-2 flex items-center justify-between gap-3 text-xs text-mist">
+              <span>You pay</span>
+              <span data-testid="pay-balance">{tokenBalance(payToken?.symbol, payBalance)}</span>
+            </span>
+            <span className="flex items-center gap-3">
+              <input
+                data-testid="pay-input"
+                value={amount}
+                inputMode="decimal"
+                autoComplete="off"
+                placeholder="0"
+                aria-label="You pay"
+                onChange={(event) => {
+                  const next = decimalInput(event.target.value);
+                  if (next !== null) setAmount(next);
+                }}
+                className={fieldClass}
+              />
               <select
                 data-testid="token-in"
                 value={tokenIn}
+                aria-label="Pay token"
                 onChange={(event) => setTokenInChoice(event.target.value)}
-                className="mt-1 w-full rounded-2xl border border-white/10 bg-ink px-3 py-3 text-sm text-frost"
+                className="max-w-28 rounded-full border border-white/10 bg-ink px-3 py-2 text-sm text-frost"
               >
                 {options.map((option) => (
                   <option key={`in-${option.address}`} value={option.address}>
@@ -334,17 +407,49 @@ export function IntentForm({
                   </option>
                 ))}
               </select>
-            </label>
-            <label className="block text-xs text-mist">
-              <span className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                <span>Receive</span>
-                <span data-testid="receive-balance">{tokenBalance(receiveToken?.symbol, receiveBalance)}</span>
+            </span>
+            <button
+              type="button"
+              className="mt-2 text-xs text-cyan-glow disabled:opacity-40"
+              disabled={payBalance.value === undefined || busy}
+              onClick={() => {
+                if (payBalance.value !== undefined) setAmount(plainUnits(payBalance.value, payBalance.decimals));
+              }}
+            >
+              Max
+            </button>
+          </label>
+          <div className="flex justify-center">
+            <button
+              type="button"
+              className="rounded-full border border-white/10 px-3 py-1 text-xs text-frost"
+              onClick={() => {
+                setTokenInChoice(tokenOut);
+                setTokenOutChoice(tokenIn);
+                setLimitTouched(false);
+              }}
+            >
+              Flip pair
+            </button>
+          </div>
+          <div className="field-well rounded-3xl px-4 py-3">
+            <span className="mb-2 flex items-center justify-between gap-3 text-xs text-mist">
+              <span>You receive</span>
+              <span data-testid="receive-balance">{tokenBalance(receiveToken?.symbol, receiveBalance)}</span>
+            </span>
+            <span className="flex items-center gap-3">
+              <span className="min-w-0 flex-1 truncate text-2xl font-medium tracking-tight text-frost sm:text-3xl" data-testid="receive-quote">
+                {poolOut ? formatUnits(poolOut, places, 6) : pair && quote?.ready === false && !quote.failed ? "Reading…" : "—"}
               </span>
               <select
                 data-testid="token-out"
                 value={tokenOut}
-                onChange={(event) => setTokenOutChoice(event.target.value)}
-                className="mt-1 w-full rounded-2xl border border-white/10 bg-ink px-3 py-3 text-sm text-frost"
+                aria-label="Receive token"
+                onChange={(event) => {
+                  setTokenOutChoice(event.target.value);
+                  setLimitTouched(false);
+                }}
+                className="max-w-28 rounded-full border border-white/10 bg-ink px-3 py-2 text-sm text-frost"
               >
                 <option value="">Select</option>
                 {options.map((option) => (
@@ -353,7 +458,43 @@ export function IntentForm({
                   </option>
                 ))}
               </select>
-            </label>
+            </span>
+          </div>
+          <div className="rounded-2xl border border-white/10 px-3 py-3 text-xs text-mist">
+            <div className="flex flex-wrap gap-2">
+              {[10, 50, 100].map((bps) => (
+                <button
+                  key={bps}
+                  type="button"
+                  className={`rounded-full px-3 py-1 ${slippageBps === bps && !limitTouched ? "bg-cyan-glow text-void" : "border border-white/10 text-frost"}`}
+                  onClick={() => {
+                    setSlippageBps(bps);
+                    setLimitTouched(false);
+                  }}
+                >
+                  {(bps / 100).toFixed(2)}%
+                </button>
+              ))}
+            </div>
+            <dl className="mt-3 space-y-1">
+              <div className="flex justify-between gap-3">
+                <dt>Price impact</dt>
+                <dd className="text-frost" data-testid="price-impact">{formatImpact(impact)}</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt>Network gas price</dt>
+                <dd className="text-frost" data-testid="network-fee">
+                  {gas.isLoading ? "Reading…" : gasPrice !== undefined ? `${formatUnits(gasPrice, 9, 3)} gwei` : "Unavailable"}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt>Slippage tolerance</dt>
+                <dd className="text-frost">{(slippageBps / 100).toFixed(2)}%</dd>
+              </div>
+            </dl>
+            <p className="mt-2 leading-5">
+              The wallet quotes this swap&apos;s ETH fee when you sign. The encrypted proof is built first, so that fee is not known yet.
+            </p>
           </div>
           <p className="text-xs text-mist" data-testid="pool-price">
             {!pair
@@ -363,7 +504,7 @@ export function IntentForm({
                   ? "Pool price unavailable."
                   : "Pool price Reading…"
                 : `Pool price ${formatPrice(quote.price)}`}
-            {poolOut ? ` · Pool pays ${formatUnits(poolOut, receiveBalance.decimals)} ${receiveToken?.symbol ?? ""}` : ""}
+            {poolOut ? ` · Pool pays ${formatUnits(poolOut, places)} ${receiveToken?.symbol ?? ""}` : ""}
           </p>
           {abovePool ? (
             <p className="text-xs text-rose-300" data-testid="limit-warning">
@@ -372,38 +513,29 @@ export function IntentForm({
           ) : null}
           <label className="field-well block rounded-3xl px-4 py-3">
             <span className="mb-1 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-xs text-mist">
-              <span>You pay</span>
-              <span data-testid="pay-balance">{tokenBalance(payToken?.symbol, payBalance)}</span>
-            </span>
-            <input
-              data-testid="pay-input"
-              value={amount}
-              inputMode="decimal"
-              autoComplete="off"
-              placeholder="0"
-              aria-label="You pay"
-              onChange={(event) => {
-                const next = decimalInput(event.target.value);
-                if (next !== null) setAmount(next);
-              }}
-              className={fieldClass}
-            />
-          </label>
-          <label className="field-well block rounded-3xl px-4 py-3">
-            <span className="mb-1 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-xs text-mist">
               <span>Minimum received</span>
-              <span>{tokenBalance(receiveToken?.symbol, receiveBalance)}</span>
+              <button
+                type="button"
+                className="text-cyan-glow disabled:opacity-40"
+                disabled={!suggestedText}
+                onClick={() => setLimitTouched(false)}
+              >
+                Use {(slippageBps / 100).toFixed(2)}% slippage
+              </button>
             </span>
             <input
               data-testid="limit-input"
-              value={limit}
+              value={limitShown}
               inputMode="decimal"
               autoComplete="off"
               placeholder="0"
               aria-label="Minimum received"
               onChange={(event) => {
                 const next = decimalInput(event.target.value);
-                if (next !== null) setLimit(next);
+                if (next !== null) {
+                  setLimitTouched(true);
+                  setLimit(next);
+                }
               }}
               className={fieldClass}
             />
@@ -424,41 +556,6 @@ export function IntentForm({
               ))}
             </select>
           </label>
-          <label className="block text-xs text-mist">
-            Solver
-            <input
-              data-testid="solver-input"
-              value={solverValue}
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="0x"
-              onChange={(event) => {
-                setSolverTouched(true);
-                setSolver(event.target.value.trim());
-              }}
-              className="mt-1 w-full rounded-2xl border border-white/10 bg-ink px-3 py-3 font-mono text-sm text-frost"
-            />
-          </label>
-          <label className="block text-xs text-mist">
-            Expiry in minutes
-            {windowSeconds !== undefined ? ` (window ${Number(windowSeconds) / 60} min)` : ""}
-            <input
-              data-testid="expiry-input"
-              value={minutes}
-              inputMode="numeric"
-              onChange={(event) => setMinutes(event.target.value.replace(/\D/g, ""))}
-              className="mt-1 w-full rounded-2xl border border-white/10 bg-ink px-3 py-3 text-sm text-frost"
-            />
-          </label>
-          {solverAddress ? (
-            <p className="text-xs text-mist" data-testid="solver-status">
-              {solverAllowed.isLoading
-                ? "Checking solver…"
-                : solverAllowed.data
-                  ? "Solver is whitelisted."
-                  : "Solver is not whitelisted on IntentRegistry."}
-            </p>
-          ) : null}
           <p className="text-xs text-mist" data-testid="settlement-note">
             A confirmed order stores the encrypted amount. Token balances change when the whitelisted solver fills it,
             before the order expires.

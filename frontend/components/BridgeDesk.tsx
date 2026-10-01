@@ -6,22 +6,26 @@ import { erc20Abi } from "viem";
 import { useAccount, useBalance, useReadContract, useReadContracts, useSwitchChain } from "wagmi";
 import { abis } from "@/config/contracts";
 import { OftBridge } from "@/components/OftBridge";
+import { RouteCard } from "@/components/RouteCard";
 import { TxButtonContent } from "@/components/TxButton";
 import { TxNotice } from "@/components/TxNotice";
 import { useChainTx } from "@/hooks/useChainTx";
 import { useErc20Balance } from "@/hooks/useErc20Balance";
 import { decimalInput, formatBalance, formatUnits, parseUnits, plainUnits } from "@/lib/amount";
 import { bridgeAddress, bridgeChain, bridgeChains, configOf, limitOf, parseWalletAddress, peerMatches } from "@/lib/bridge";
-import { errorText, liveReadQuery, preferredChainId } from "@/lib/deployment";
+import { deploymentFor, errorText, liveReadQuery, optionalAddress, preferredChainId } from "@/lib/deployment";
+import { isWalletProvider, switchWalletChain } from "@/lib/walletChain";
 
 const fieldClass = "mt-1 w-full rounded-2xl border border-white/10 bg-ink px-3 py-3 text-sm text-frost";
 const buttonClass =
   "min-h-12 w-full rounded-2xl bg-cyan-glow px-4 py-3 text-sm font-semibold text-void shadow-glow disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none";
 
 export function BridgeDesk() {
-  const { address, chainId: walletChainId, isConnected } = useAccount();
+  const { address, chainId: walletChainId, connector, isConnected } = useAccount();
   const { openConnectModal } = useConnectModal();
   const { switchChain, isPending: switching } = useSwitchChain();
+  const [switchError, setSwitchError] = useState<string | null>(null);
+  const [chainPrompt, setChainPrompt] = useState(false);
   const bridgeTx = useChainTx();
   const liquidityTx = useChainTx();
   const source = bridgeChain(walletChainId);
@@ -203,6 +207,7 @@ export function BridgeDesk() {
   const nativeValue = native.data?.value;
 
   let blocker: string | null = null;
+  let escrowShort = false;
   let action: "connect" | "switch" | "approve" | "bridge" | null = null;
   if (!isConnected) action = "connect";
   else if (!source) {
@@ -239,7 +244,8 @@ export function BridgeDesk() {
   } else if (escrow.isLoading) blocker = "Reading destination liquidity…";
   else if (escrow.isError || typeof escrow.data !== "bigint") blocker = `Could not read escrow on ${destination.name}.`;
   else if (escrow.data < parsed) {
-    blocker = `${destination.name} escrow holds ${formatUnits(escrow.data, selected.decimals)} ${selected.symbol}, which is less than this transfer. Deposit that token on ${destination.name} before bridging.`;
+    escrowShort = true;
+    blocker = `${destination.name} escrow holds ${formatUnits(escrow.data, selected.decimals)} ${selected.symbol}.`;
   } else if (limitQuery.isLoading) blocker = "Reading the rate limit…";
   else if (limitQuery.isError || !limit) blocker = "Could not read the rate limit.";
   else if (limit.capacity === 0n) blocker = "A rate limit is not set for this route.";
@@ -256,7 +262,9 @@ export function BridgeDesk() {
     blocker = `The LayerZero fee is ${formatUnits(fee, 18, 8)} ETH. This wallet has ${formatUnits(nativeValue, 18, 8)} ETH.`;
   } else action = "bridge";
 
-  const busy = bridgeTx.pending || liquidityTx.pending || switching;
+  const busy = bridgeTx.pending || liquidityTx.pending || switching || chainPrompt;
+  const nixAddress = optionalAddress(deploymentFor(source?.chainId), "NixToken");
+  const nixRoute = Boolean(selected && nixAddress && selected.token.toLowerCase() === nixAddress.toLowerCase());
   const buttonLabel =
     action === "connect"
       ? "Connect wallet"
@@ -267,6 +275,30 @@ export function BridgeDesk() {
           : action === "bridge"
             ? "Bridge"
             : "Bridge";
+
+  async function promptSwitch(nextChainId: number) {
+    setSwitchError(null);
+    setChainPrompt(true);
+    try {
+      const provider = await connector?.getProvider();
+      if (!isWalletProvider(provider)) {
+        switchChain({ chainId: nextChainId });
+        return;
+      }
+      await switchWalletChain(provider, nextChainId);
+    } catch (error) {
+      setSwitchError(errorText(error));
+    } finally {
+      setChainPrompt(false);
+    }
+  }
+
+  async function depositOnDestination() {
+    if (!destination || !selected || !parsed || typeof escrow.data !== "bigint") return;
+    const shortfall = parsed > escrow.data ? parsed - escrow.data : parsed;
+    setLiquidity(plainUnits(shortfall, selected.decimals));
+    await promptSwitch(destination.chainId);
+  }
 
   async function approve(amountToApprove: bigint) {
     if (!selected || !bridge || !source) return;
@@ -357,7 +389,7 @@ export function BridgeDesk() {
               disabled={!isConnected || busy}
               onChange={(event) => {
                 const next = Number(event.target.value);
-                if (bridgeChain(next)) switchChain({ chainId: next });
+                if (bridgeChain(next)) void promptSwitch(next);
               }}
             >
               {source ? null : <option value="">Select a network</option>}
@@ -398,7 +430,7 @@ export function BridgeDesk() {
             event.preventDefault();
             if (busy) return;
             if (action === "connect") openConnectModal?.();
-            else if (action === "switch") switchChain({ chainId: preferredChainId });
+            else if (action === "switch") void promptSwitch(preferredChainId);
             else if (action === "approve" && parsed) void approve(parsed);
             else if (action === "bridge") void bridgeTokens();
           }}
@@ -502,9 +534,45 @@ export function BridgeDesk() {
               </span>
             </div>
           </div>
+          <RouteCard
+            testId="bridge-route"
+            mode="Lock and release"
+            from={source?.name}
+            to={destination?.name}
+            fromChainId={source?.chainId}
+            token={selected?.symbol}
+            amount={parsed ? formatUnits(parsed, selected?.decimals ?? 18) : undefined}
+            quotedFee={fee !== undefined ? `${formatUnits(fee, 18, 8)} ETH` : undefined}
+            walletFee={feeValue !== undefined ? `${formatUnits(feeValue, 18, 8)} ETH` : undefined}
+          />
           <p className="min-h-5 text-xs leading-5 text-rose-300" data-testid="bridge-error">
-            {action === "connect" || action === "bridge" || action === "approve" ? "" : blocker}
+            {escrowShort || action === "connect" || action === "bridge" || action === "approve" ? "" : blocker}
           </p>
+          {escrowShort && selected && destination && typeof escrow.data === "bigint" ? (
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-3 text-xs leading-5 text-mist" data-testid="bridge-escrow-guide">
+              <p className="text-frost">
+                {destination.name} escrow holds {formatUnits(escrow.data, selected.decimals)} {selected.symbol}.
+              </p>
+              <p className="mt-2">
+                Lock and release pays this transfer from tokens already sitting in the {destination.name} bridge. It does not mint {selected.symbol}. Deposit {selected.symbol} on {destination.name} first. Switching fills the deposit field with the amount the escrow is missing.
+              </p>
+              {nixRoute ? (
+                <p className="mt-2">
+                  The cloud solver also deposits NIX into a destination escrow that is below its target, when the solver wallet on {destination.name} holds NIX. Your own deposit is available as soon as it confirms. The solver deposit waits for its next poll.
+                </p>
+              ) : null}
+              <button
+                type="button"
+                className="mt-3 text-sm text-cyan-glow disabled:opacity-40"
+                disabled={busy}
+                data-testid="bridge-deposit-switch"
+                onClick={() => void depositOnDestination()}
+              >
+                Switch to {destination.name} to deposit
+              </button>
+            </div>
+          ) : null}
+          {switchError ? <p className="text-xs leading-5 text-rose-300">{switchError}</p> : null}
           <button
             type="submit"
             data-testid="bridge-submit"
@@ -539,7 +607,7 @@ export function BridgeDesk() {
             event.preventDefault();
             if (busy || !liquidityReady) return;
             if (!isConnected) openConnectModal?.();
-            else if (!source) switchChain({ chainId: preferredChainId });
+            else if (!source) void promptSwitch(preferredChainId);
             else if (liquidityNeedsApproval) void approveLiquidity();
             else void depositLiquidity();
           }}

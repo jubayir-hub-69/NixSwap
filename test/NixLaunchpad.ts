@@ -177,9 +177,9 @@ describe("NixLaunchpad", function () {
     );
   });
 
-  it("seeds 2% on every chain and burns on the source when the peer mints", async function () {
+  it("shares a 1 billion supply: 94% to the source wallet and 2% on each chain", async function () {
     const { nix, launchpad, alice, bob, seed, omnichain } = await deploy();
-    const supply = 1_000_000n * ONE;
+    const supply = 1_000_000_000n * ONE;
     const liquidity = perChain(supply);
     await launchpad.connect(alice).createToken("Alpha", "ALP", supply);
     const listed = await launchpad.allTokens();
@@ -224,7 +224,10 @@ describe("NixLaunchpad", function () {
     }
 
     const creatorAmount = supply - liquidity * 3n;
+    expect(creatorAmount).to.equal((supply * 9_400n) / 10_000n);
+    expect(liquidity * 3n).to.equal((supply * 600n) / 10_000n);
     expect(await sourceToken.balanceOf(alice.address)).to.equal(creatorAmount);
+    expect(await sourceToken.totalSupply()).to.equal(creatorAmount + liquidity);
     const mirroredSupply = liquidity * 2n;
     expect((await sourceToken.totalSupply()) + mirroredSupply).to.equal(supply);
 

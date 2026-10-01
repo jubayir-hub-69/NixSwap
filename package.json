@@ -16,6 +16,9 @@
   "type": "commonjs",
   "dependencies": {
     "@cofhe/sdk": "^0.7.1",
+    "@radix-ui/react-dialog": "^1.1.23",
+    "@radix-ui/react-dropdown-menu": "^2.1.24",
+    "@radix-ui/react-tabs": "^1.1.21",
     "dotenv": "^18.0.3",
     "ethers": "^6.17.0"
   },

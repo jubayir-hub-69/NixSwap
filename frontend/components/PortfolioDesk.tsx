@@ -1,10 +1,14 @@
 "use client";
 
 import { useConnectModal } from "@rainbow-me/rainbowkit";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { erc20Abi } from "viem";
 import { useAccount, useSwitchChain } from "wagmi";
 import { AddToWalletButton } from "@/components/AddToWalletButton";
+import { HistoryDesk } from "@/components/HistoryDesk";
+import { PricedSummary } from "@/components/PricedSummary";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { QrAddress } from "@/components/QrAddress";
 import { TxButtonContent } from "@/components/TxButton";
 import { TxNotice } from "@/components/TxNotice";
@@ -12,8 +16,9 @@ import { useChainTx } from "@/hooks/useChainTx";
 import { useChainHoldings, type Holding } from "@/hooks/useChainHoldings";
 import { decimalInput, formatBalance, formatUnits, parseUnits, plainUnits } from "@/lib/amount";
 import { bridgeChain, bridgeChains, parseWalletAddress } from "@/lib/bridge";
-import { preferredChainId } from "@/lib/deployment";
+import { errorText, preferredChainId } from "@/lib/deployment";
 import { shortAddress } from "@/lib/markets";
+import { isWalletProvider, switchWalletChain } from "@/lib/walletChain";
 
 const fieldClass = "mt-1 w-full rounded-2xl border border-white/10 bg-ink px-3 py-3 text-sm text-frost";
 const buttonClass =
@@ -184,7 +189,7 @@ function ReceivePanel({
   chainName: string;
   symbol: string;
   address: `0x${string}`;
-  onClose: () => void;
+  onClose?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
@@ -209,9 +214,11 @@ function ReceivePanel({
             Send {symbol} on {chainName} to this wallet. A transfer from another network uses the Bridge page.
           </p>
         </div>
-        <button type="button" className="text-xs text-mist" onClick={onClose}>
-          Close
-        </button>
+        {onClose ? (
+          <button type="button" className="text-xs text-mist" onClick={onClose}>
+            Close
+          </button>
+        ) : null}
       </div>
       <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-center">
         <QrAddress value={address} />
@@ -246,7 +253,7 @@ function ChainBook({
   selection: Selection | null;
   busy: boolean;
   onSelect: (next: Selection) => void;
-  onSwitch: (chainId: number) => void;
+  onSwitch: (chainId: number, next?: Selection) => void;
   onConnect: () => void;
 }) {
   const book = useChainHoldings(chainId);
@@ -308,11 +315,12 @@ function ChainBook({
                   busy={busy}
                   onSend={() => {
                     if (!walletConnected) onConnect();
-                    else if (!connectedHere) onSwitch(chainId);
+                    else if (!connectedHere) onSwitch(chainId, { chainId, token: holding.address, mode: "send" });
                     else onSelect({ chainId, token: holding.address, mode: "send" });
                   }}
                   onReceive={() => {
                     if (!walletConnected) onConnect();
+                    else if (!connectedHere) onSwitch(chainId, { chainId, token: holding.address, mode: "receive" });
                     else onSelect({ chainId, token: holding.address, mode: "receive" });
                   }}
                 />
@@ -341,11 +349,81 @@ function ChainBook({
   );
 }
 
+function SendChooser({
+  chainId,
+  busy,
+  onPick,
+}: {
+  chainId: number;
+  busy: boolean;
+  onPick: (next: Selection) => void;
+}) {
+  const book = useChainHoldings(chainId);
+  const title = bridgeChain(chainId)?.name ?? book.network ?? "Network";
+  return (
+    <section className="glass-panel rounded-[28px] p-4">
+      <h2 className="text-sm font-semibold text-frost">{title}</h2>
+      {book.loading && book.holdings.length === 0 ? <p className="mt-3 text-sm text-mist">Reading on-chain balances…</p> : null}
+      {!book.loading && book.holdings.length === 0 ? <p className="mt-3 text-sm text-mist">No token on {title}.</p> : null}
+      <div className="mt-3 flex flex-col gap-2">
+        {book.holdings.map((holding) => (
+          <button
+            key={holding.address}
+            type="button"
+            disabled={busy}
+            className="flex items-center justify-between rounded-2xl border border-white/10 px-3 py-3 text-left text-sm text-frost disabled:opacity-40"
+            onClick={() => onPick({ chainId, token: holding.address, mode: "send" })}
+          >
+            <span>{holding.symbol ?? shortAddress(holding.address)}</span>
+            <span>
+              {formatBalance(
+                true,
+                holding.loading,
+                holding.error,
+                holding.balance,
+                holding.decimals ?? 18,
+              )}
+            </span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function PortfolioDesk() {
-  const { address, chainId, isConnected } = useAccount();
+  const params = useSearchParams();
+  const router = useRouter();
+  const requested = params.get("tab");
+  const tab = requested === "send" || requested === "receive" || requested === "history" ? requested : "assets";
+  const { address, chainId, connector, isConnected } = useAccount();
   const { openConnectModal } = useConnectModal();
   const { switchChain, isPending: switching } = useSwitchChain();
   const [selection, setSelection] = useState<Selection | null>(null);
+  const [pending, setPending] = useState<Selection | null>(null);
+  const [switchingChain, setSwitchingChain] = useState(false);
+  const [switchError, setSwitchError] = useState<string | null>(null);
+
+  // Open send or receive only after the wallet reports the chain that action needs.
+  if (pending && chainId === pending.chainId) {
+    setSelection(pending);
+    setPending(null);
+  }
+
+  async function switchTo(nextChainId: number, next?: Selection) {
+    setSwitchError(null);
+    setSwitchingChain(true);
+    try {
+      const provider = await connector?.getProvider();
+      if (isWalletProvider(provider)) await switchWalletChain(provider, nextChainId);
+      else switchChain({ chainId: nextChainId });
+      if (next) setPending(next);
+    } catch (error) {
+      setSwitchError(errorText(error));
+    } finally {
+      setSwitchingChain(false);
+    }
+  }
   const selectedChain = bridgeChain(selection?.chainId);
   const selectedBook = useChainHoldings(selection?.chainId ?? preferredChainId);
   const selectedHolding = selection ? findHolding(selectedBook.holdings, selection.token) : undefined;
@@ -374,36 +452,85 @@ export function PortfolioDesk() {
           <button
             type="button"
             className={`${buttonClass} mt-4`}
-            disabled={switching}
-            onClick={() => switchChain({ chainId: preferredChainId })}
+            disabled={switching || switchingChain}
+            onClick={() => void switchTo(preferredChainId)}
           >
             Switch network
           </button>
         ) : null}
+        {switchError ? <p className="mt-3 text-xs leading-5 text-rose-300">{switchError}</p> : null}
       </section>
 
-      {selection?.mode === "receive" && address && selectedChain ? (
-        <ReceivePanel
-          chainName={selectedChain.name}
-          symbol={receiveSymbol}
-          address={address}
-          onClose={() => setSelection(null)}
-        />
-      ) : null}
-
-      {bridgeChains.map((chain) => (
-        <ChainBook
-          key={chain.chainId}
-          chainId={chain.chainId}
-          walletChainId={isConnected ? chainId : undefined}
-          walletConnected={Boolean(isConnected && address)}
-          selection={selection?.mode === "send" ? selection : null}
-          busy={switching}
-          onSelect={choose}
-          onSwitch={(next) => switchChain({ chainId: next })}
-          onConnect={() => openConnectModal?.()}
-        />
-      ))}
+      <Tabs
+        value={tab}
+        onValueChange={(next: string) => {
+          router.replace(next === "assets" ? "/portfolio" : `/portfolio?tab=${next}`, { scroll: false });
+        }}
+      >
+        <TabsList>
+          <TabsTrigger value="assets">Assets</TabsTrigger>
+          <TabsTrigger value="send">Send</TabsTrigger>
+          <TabsTrigger value="receive">Receive</TabsTrigger>
+          <TabsTrigger value="history" data-testid="portfolio-history">
+            History
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="assets" className="mt-4 flex flex-col gap-4">
+          <PricedSummary showAllocation />
+          {selection?.mode === "receive" && address && selectedChain ? (
+            <ReceivePanel
+              chainName={selectedChain.name}
+              symbol={receiveSymbol}
+              address={address}
+              onClose={() => setSelection(null)}
+            />
+          ) : null}
+          {bridgeChains.map((chain) => (
+            <ChainBook
+              key={chain.chainId}
+              chainId={chain.chainId}
+              walletChainId={isConnected ? chainId : undefined}
+              walletConnected={Boolean(isConnected && address)}
+              selection={selection?.mode === "send" ? selection : null}
+              busy={switching || switchingChain}
+              onSelect={choose}
+              onSwitch={(next, follow) => void switchTo(next, follow)}
+              onConnect={() => openConnectModal?.()}
+            />
+          ))}
+        </TabsContent>
+        <TabsContent value="send" className="mt-4 flex flex-col gap-4">
+          {selection?.mode === "send" && selectedHolding && selectedChain ? (
+            <SendPanel chainId={selection.chainId} chainName={selectedChain.name} holding={selectedHolding} onClose={() => setSelection(null)} />
+          ) : (
+            <p className="text-sm text-mist">Choose an asset. The wallet switches to that asset&apos;s network before the send form opens.</p>
+          )}
+          {bridgeChains.map((chain) => (
+            <SendChooser
+              key={chain.chainId}
+              chainId={chain.chainId}
+              busy={switching || switchingChain}
+              onPick={(next) => {
+                if (!isConnected || !address) openConnectModal?.();
+                else if (chainId !== next.chainId) void switchTo(next.chainId, next);
+                else setSelection(next);
+              }}
+            />
+          ))}
+        </TabsContent>
+        <TabsContent value="receive" className="mt-4">
+          {address && bridgeChain(chainId) ? (
+            <ReceivePanel chainName={bridgeChain(chainId)?.name ?? "this network"} symbol="tokens" address={address} />
+          ) : (
+            <section className="glass-panel rounded-[28px] p-5 text-sm text-mist">
+              {isConnected ? "Switch to a NixSwap network to show this wallet's receive address." : "Connect a wallet to show its receive address."}
+            </section>
+          )}
+        </TabsContent>
+        <TabsContent value="history" className="mt-4">
+          <HistoryDesk embedded />
+        </TabsContent>
+      </Tabs>
     </main>
   );
 }

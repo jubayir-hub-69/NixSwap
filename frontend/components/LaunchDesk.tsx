@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
+import { erc20Abi } from "viem";
 import { useAccount, useBalance, useReadContract, useReadContracts, useSwitchChain } from "wagmi";
 import { abis } from "@/config/contracts";
 import { TxButtonContent } from "@/components/TxButton";
@@ -104,6 +105,13 @@ function LaunchCard({
     query: { enabled: omnichain, retry: false },
   });
   const isMirror = mirror.isSuccess && mirror.data === true;
+  const minted = useReadContract({
+    address: row.token,
+    abi: erc20Abi,
+    functionName: "totalSupply",
+    chainId,
+    query: { refetchInterval: 12_000 },
+  });
   const pending = useReadContract({
     address: launchpad,
     abi: abis.NixLaunchpad,
@@ -163,8 +171,14 @@ function LaunchCard({
           <p className="text-sm text-frost">
             {row.name} <span className="text-cyan-glow">{row.symbol}</span>
           </p>
-          <p className="mt-1 text-[11px] text-mist">
-            {formatUnits(row.supply, 18, 2)} supply · {shortAddress(row.creator)}
+          <p className="mt-1 text-[11px] text-mist" data-testid="launch-minted">
+            {minted.isSuccess && typeof minted.data === "bigint"
+              ? `${formatUnits(minted.data, 18, 2)} minted on this network`
+              : minted.isError
+                ? "Minted supply unavailable"
+                : "Reading the minted supply…"}
+            {" · "}
+            {formatUnits(row.supply, 18, 2)} shared cap · {shortAddress(row.creator)}
           </p>
           {showHolding ? (
             <p className="mt-1 text-[11px] text-mist" data-testid="creator-balance">

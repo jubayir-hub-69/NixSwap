@@ -7,6 +7,7 @@ import { useLaunches } from "@/hooks/useLaunches";
 import { useMarketQuotes } from "@/hooks/useMarketQuotes";
 import { formatUnits } from "@/lib/amount";
 import { errorText, preferredChainId } from "@/lib/deployment";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatChange, formatPrice, shortAddress, type LaunchRow, type MarketFigures } from "@/lib/markets";
 
 type Quote = LaunchRow & MarketFigures;
@@ -134,44 +135,53 @@ export function MarketsBoard() {
             <StatCard title="Trending" rows={trending} />
           </div>
           <section className="glass-panel overflow-x-auto rounded-[28px] p-4" data-testid="market-table">
-            <table className="w-full min-w-[720px] text-left text-sm">
-              <thead className="text-[11px] uppercase tracking-wide text-mist">
-                <tr>
-                  <th className="px-3 py-2 font-medium">Token</th>
-                  <th className="px-3 py-2 font-medium">Price</th>
-                  <th className="px-3 py-2 font-medium">24h</th>
-                  <th className="px-3 py-2 font-medium">24h volume</th>
-                  <th className="px-3 py-2 font-medium">NIX reserve</th>
-                  <th className="px-3 py-2 font-medium">Token reserve</th>
-                </tr>
-              </thead>
-              <tbody>
-                {quotes.map((row) => (
-                  <tr key={row.token} className="border-t border-white/5">
-                    <td className="px-3 py-3">
-                      <Link href={`/pool?token=${row.token}`} className="text-frost hover:text-cyan-glow">
-                        {row.symbol}
-                      </Link>
-                      <span className="mt-0.5 block text-[11px] text-mist">
-                        {row.name} · {shortAddress(row.token)}
-                      </span>
-                      {launches.chainId ? (
-                        <AddToWalletButton token={row.token} chainId={launches.chainId} className="mt-1 text-[11px] text-cyan-glow disabled:opacity-40" />
-                      ) : null}
-                    </td>
-                    <td className="px-3 py-3 text-frost">{priceLabel(row)}</td>
-                    <td className={`px-3 py-3 ${row.ready && row.change !== null && row.change > 0 ? "text-emerald-300" : row.ready && row.change !== null && row.change < 0 ? "text-rose-300" : "text-mist"}`}>
-                      {row.ready && row.change !== null ? formatChange(row.change) : "—"}
-                    </td>
-                    <td className="px-3 py-3 text-frost">
-                      {row.ready ? (row.volume24h === undefined ? "—" : formatUnits(row.volume24h, 18, 2)) : row.failed ? "Unavailable" : "Reading…"}
-                    </td>
-                    <td className="px-3 py-3 text-frost">{reserveLabel(row, row.ready ? row.reserveNix : undefined)}</td>
-                    <td className="px-3 py-3 text-frost">{reserveLabel(row, row.ready ? row.reserveToken : undefined)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <Table>
+              <TableHeader>
+                <TableRow className="border-t-0">
+                  <TableHead>Token</TableHead>
+                  <TableHead>Price</TableHead>
+                  <TableHead>24h</TableHead>
+                  <TableHead>Trend</TableHead>
+                  <TableHead>24h volume</TableHead>
+                  <TableHead>NIX reserve</TableHead>
+                  <TableHead>Token reserve</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {quotes.map((row) => {
+                  const up = row.ready && row.change !== null && row.change > 0;
+                  const down = row.ready && row.change !== null && row.change < 0;
+                  const trend = !row.ready || row.change === null ? "Unavailable" : up ? "Up" : down ? "Down" : "Flat";
+                  return (
+                    <TableRow key={row.token}>
+                      <TableCell>
+                        <Link href={`/swap?token=${row.token}`} className="text-frost hover:text-cyan-glow">
+                          {row.symbol}
+                        </Link>
+                        <span className="mt-0.5 block text-[11px] text-mist">
+                          {row.name} · {shortAddress(row.token)} · <Link href={`/pool?token=${row.token}`} className="text-cyan-glow">Pool</Link>
+                        </span>
+                        {launches.chainId ? (
+                          <AddToWalletButton token={row.token} chainId={launches.chainId} className="mt-1 text-[11px] text-cyan-glow disabled:opacity-40" />
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="text-frost">{priceLabel(row)}</TableCell>
+                      <TableCell className={up ? "text-emerald-300" : down ? "text-rose-300" : "text-mist"}>
+                        {row.ready && row.change !== null ? formatChange(row.change) : "—"}
+                      </TableCell>
+                      <TableCell className={up ? "text-emerald-300" : down ? "text-rose-300" : "text-mist"} aria-label={`Trend ${trend}`}>
+                        {trend === "Up" ? "▲" : trend === "Down" ? "▼" : trend === "Flat" ? "–" : "—"}
+                      </TableCell>
+                      <TableCell className="text-frost">
+                        {row.ready ? (row.volume24h === undefined ? "—" : formatUnits(row.volume24h, 18, 2)) : row.failed ? "Unavailable" : "Reading…"}
+                      </TableCell>
+                      <TableCell className="text-frost">{reserveLabel(row, row.ready ? row.reserveNix : undefined)}</TableCell>
+                      <TableCell className="text-frost">{reserveLabel(row, row.ready ? row.reserveToken : undefined)}</TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
           </section>
         </>
       )}
