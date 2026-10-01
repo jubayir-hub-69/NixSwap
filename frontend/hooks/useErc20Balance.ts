@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { erc20Abi } from "viem";
 import { useReadContract } from "wagmi";
 import { asBigint, asNumber } from "@/lib/amount";
@@ -26,12 +27,24 @@ export function useErc20Balance(
     chainId,
     query: { enabled: Boolean(token && chainId), staleTime: 60_000 },
   });
+  const value = asBigint(balance.data);
+  const error = enabled && value === undefined && balance.isError;
+  const loading = enabled && value === undefined && !balance.isError && balance.isFetching;
+  const refetch = balance.refetch;
+
+  useEffect(() => {
+    if (!loading) return;
+    const timer = setInterval(() => {
+      void refetch({ cancelRefetch: true });
+    }, 12_000);
+    return () => clearInterval(timer);
+  }, [loading, refetch]);
 
   return {
-    value: asBigint(balance.data),
+    value,
     decimals: asNumber(decimals.data) ?? 18,
-    loading: enabled && balance.isLoading,
-    error: Boolean(balance.error),
-    refetch: balance.refetch,
+    loading,
+    error,
+    refetch,
   };
 }

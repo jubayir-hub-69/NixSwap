@@ -2,7 +2,7 @@
 
 import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { isAddress, maxUint256 } from "viem";
 import { useAccount, useBlock, useEstimateFeesPerGas, useReadContract, useSwitchChain } from "wagmi";
 import { abis } from "@/config/contracts";
@@ -73,7 +73,9 @@ export function IntentForm({
     () => (pair ? [{ pair: pair.pair, token: pair.token }] : []),
     [pair],
   );
-  const quote = useMarketQuotes(route, chainId, deployment?.NixToken).quotes[0];
+  const market = useMarketQuotes(route, chainId, deployment?.NixToken);
+  const quote = market.quotes[0];
+  const quoteFailed = quote !== undefined && quote.ready === false && quote.failed;
   const sellingNix = Boolean(deployment && tokenInAddress?.toLowerCase() === deployment.NixToken.toLowerCase());
   const payToken = options.find((option) => option.address.toLowerCase() === tokenInAddress?.toLowerCase());
   const receiveToken = options.find((option) => option.address.toLowerCase() === tokenOutAddress?.toLowerCase());
@@ -161,6 +163,76 @@ export function IntentForm({
   );
   const routeReady = Boolean(tokenInAddress && tokenOutAddress && tokenInAddress.toLowerCase() !== tokenOutAddress.toLowerCase());
   const busy = tx.pending || switching;
+  const allowanceLoading = allowance.data === undefined && !allowance.isError && allowance.isFetching;
+  const windowLoading = maxWindow.data === undefined && !maxWindow.isError && maxWindow.isFetching;
+  const solverLoading = Boolean(solverAddress) && solverAllowed.data === undefined && !solverAllowed.isError && solverAllowed.isFetching;
+  const quoteLoading = Boolean(pair) && quote !== undefined && quote.ready === false && !quoteFailed && !market.error && market.loading;
+  const readsStuck = allowanceLoading || windowLoading || solverLoading || payBalance.loading || receiveBalance.loading || quoteLoading;
+  const refetchPayBalance = payBalance.refetch;
+  const refetchReceiveBalance = receiveBalance.refetch;
+  const refetchAllowance = allowance.refetch;
+  const refetchMaxWindow = maxWindow.refetch;
+  const refetchSolver = solverAllowed.refetch;
+  const refetchMarket = market.refetch;
+  const refetchGas = gas.refetch;
+  const refetchBlock = block.refetch;
+
+  useEffect(() => {
+    if (tx.status === "pending" || !tx.hash) return;
+    const refresh = () => {
+      void refetchPayBalance();
+      void refetchReceiveBalance();
+      void refetchAllowance();
+      void refetchMaxWindow();
+      void refetchSolver();
+      void refetchMarket();
+      void refetchGas();
+      void refetchBlock();
+    };
+    refresh();
+    if (tx.status !== "success") return;
+    // The submit receipt only stores the order. Token balances move when the solver fills it.
+    const timer = setInterval(refresh, 4_000);
+    const stop = setTimeout(() => clearInterval(timer), 60_000);
+    return () => {
+      clearInterval(timer);
+      clearTimeout(stop);
+    };
+  }, [
+    refetchAllowance,
+    refetchBlock,
+    refetchGas,
+    refetchMarket,
+    refetchMaxWindow,
+    refetchPayBalance,
+    refetchReceiveBalance,
+    refetchSolver,
+    tx.hash,
+    tx.status,
+  ]);
+
+  useEffect(() => {
+    if (!readsStuck) return;
+    const timer = setInterval(() => {
+      void refetchAllowance({ cancelRefetch: true });
+      void refetchMaxWindow({ cancelRefetch: true });
+      void refetchSolver({ cancelRefetch: true });
+      void refetchPayBalance({ cancelRefetch: true });
+      void refetchReceiveBalance({ cancelRefetch: true });
+      void refetchMarket();
+      void refetchGas();
+    }, 12_000);
+    return () => clearInterval(timer);
+  }, [
+    readsStuck,
+    refetchAllowance,
+    refetchGas,
+    refetchMarket,
+    refetchMaxWindow,
+    refetchPayBalance,
+    refetchReceiveBalance,
+    refetchSolver,
+  ]);
 
   async function whitelist() {
     if (!deployment || !solverAddress || !walletChainId) return;
@@ -263,7 +335,7 @@ export function IntentForm({
   let label = title === "Trade" ? "Trade" : "Swap";
   if (!isConnected) label = "Connect wallet";
   else if (!deployment || !targetChain) label = switching ? "Switching network…" : "Switch network";
-  else if (maxWindow.isLoading || allowance.isLoading) label = "Reading contracts…";
+  else if (windowLoading || allowanceLoading) label = "Reading contracts…";
   else if (!routeReady) label = "Choose two tokens";
   else if (!amount || !limitShown) label = "Enter amount and minimum";
   else if (amountRaw === null || limitRaw === null || amountRaw === 0n || limitRaw === 0n || publicAmount === null) {
@@ -273,7 +345,7 @@ export function IntentForm({
   else if (shortPay) label = `Not enough ${payToken?.symbol ?? "tokens"}`;
   else if (needsApproval) label = "Approve Token";
   else if (!solverAddress) label = "Enter a solver address";
-  else if (solverAllowed.isLoading) label = "Checking solver…";
+  else if (solverLoading) label = "Checking solver…";
   else if (solverAllowed.data === false) label = "Solver is not whitelisted";
   else if (!expiryOk) label = "Choose an expiry inside the intent window";
 
@@ -353,11 +425,13 @@ export function IntentForm({
                 </label>
                 {solverAddress ? (
                   <p className="mt-3 text-xs text-mist" data-testid="solver-status">
-                    {solverAllowed.isLoading
+                    {solverLoading
                       ? "Checking solver…"
                       : solverAllowed.data
                         ? "Solver is whitelisted."
-                        : "Solver is not whitelisted on IntentRegistry."}
+                        : solverAllowed.isError
+                          ? "Solver status unavailable."
+                          : "Solver is not whitelisted on IntentRegistry."}
                   </p>
                 ) : null}
               </DialogContent>
@@ -439,7 +513,7 @@ export function IntentForm({
             </span>
             <span className="flex items-center gap-3">
               <span className="min-w-0 flex-1 truncate text-2xl font-medium tracking-tight text-frost sm:text-3xl" data-testid="receive-quote">
-                {poolOut ? formatUnits(poolOut, places, 6) : pair && quote?.ready === false && !quote.failed ? "Reading…" : "—"}
+                {poolOut ? formatUnits(poolOut, places, 6) : quoteLoading ? "Reading…" : "—"}
               </span>
               <select
                 data-testid="token-out"
@@ -484,7 +558,7 @@ export function IntentForm({
               <div className="flex justify-between gap-3">
                 <dt>Network gas price</dt>
                 <dd className="text-frost" data-testid="network-fee">
-                  {gas.isLoading ? "Reading…" : gasPrice !== undefined ? `${formatUnits(gasPrice, 9, 3)} gwei` : "Unavailable"}
+                  {gasPrice !== undefined ? `${formatUnits(gasPrice, 9, 3)} gwei` : gas.isFetching && !gas.isError ? "Reading…" : "Unavailable"}
                 </dd>
               </div>
               <div className="flex justify-between gap-3">
@@ -499,11 +573,13 @@ export function IntentForm({
           <p className="text-xs text-mist" data-testid="pool-price">
             {!pair
               ? "Pool price appears after that token has a NIX pair."
-              : !quote?.ready
-                ? quote?.failed
+              : quote?.ready
+                ? `Pool price ${formatPrice(quote.price)}`
+                : quoteFailed || market.error
                   ? "Pool price unavailable."
-                  : "Pool price Reading…"
-                : `Pool price ${formatPrice(quote.price)}`}
+                  : quoteLoading
+                    ? "Pool price Reading…"
+                    : "Pool price unavailable."}
             {poolOut ? ` · Pool pays ${formatUnits(poolOut, places)} ${receiveToken?.symbol ?? ""}` : ""}
           </p>
           {abovePool ? (
@@ -575,7 +651,7 @@ export function IntentForm({
             type="submit"
             data-testid="swap-action"
             aria-busy={action === "trade" && tx.pending}
-            disabled={isConnected && deployment ? allowance.isLoading || !(needsApproval || canSubmit) || busy : busy}
+            disabled={isConnected && deployment ? allowanceLoading || !(needsApproval || canSubmit) || busy : busy}
             className="btn-primary min-h-12 w-full rounded-2xl px-4 py-3 text-sm font-semibold"
           >
             <TxButtonContent pending={action === "trade" && tx.pending} phase={tx.phase} idle={label} />

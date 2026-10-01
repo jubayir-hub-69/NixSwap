@@ -66,5 +66,5 @@ export function useMarketQuotes<T extends PairRef>(
     });
   }, [pairs, reads.data]);
 
-  return { quotes, loading: reads.isLoading, error: reads.error };
+  return { quotes, loading: reads.isLoading && reads.data === undefined, error: reads.error, refetch: reads.refetch };
 }
