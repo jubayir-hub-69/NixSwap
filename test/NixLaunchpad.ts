@@ -109,6 +109,65 @@ describe("NixLaunchpad", function () {
     expect(await pair.reserveNix()).to.equal(seed);
   });
 
+  it("pulls the reserve ratio and reverts a withdrawal the wallet does not hold", async function () {
+    const { nix, launchpad, alice, seed } = await deploy();
+    const supply = 100_000n * ONE;
+    await launchpad.connect(alice).createToken("Xionnet", "XNT", supply);
+    const listed = await launchpad.allTokens();
+    const token = await hre.ethers.getContractAt("LaunchToken", listed[0].token);
+    const pair = await hre.ethers.getContractAt("NixPair", listed[0].pair);
+    const pairAddress = await pair.getAddress();
+    const liquidityTokens = perChain(supply);
+
+    expect(liquidityTokens).to.equal(2_000n * ONE);
+    expect(await pair.reserveNix()).to.equal(seed);
+    expect(await pair.reserveToken()).to.equal(liquidityTokens);
+    expect(await pair.liquidityOf(alice.address)).to.equal(0n);
+    await expect(pair.connect(alice).removeLiquidity(200)).to.be.revertedWithCustomError(
+      pair,
+      "InsufficientShares"
+    );
+
+    const nixIn = 200n * ONE;
+    const tokenIn = 39_999n * ONE;
+    const quoted = await pair.quoteAdd(nixIn, tokenIn);
+    expect(quoted.nixUsed).to.equal(nixIn);
+    expect(quoted.tokenUsed).to.equal(4_000n * ONE);
+
+    const narrow = await pair.quoteAdd(200n * ONE, 200n * ONE);
+    expect(narrow.nixUsed).to.equal(10n * ONE - 1n);
+    await nix.connect(alice).approve(pairAddress, narrow.nixUsed);
+    await expect(pair.connect(alice).addLiquidity(nixIn, tokenIn)).to.be.reverted;
+
+    await nix.connect(alice).approve(pairAddress, nixIn);
+    await token.connect(alice).approve(pairAddress, tokenIn);
+    await pair.connect(alice).addLiquidity(nixIn, tokenIn);
+    expect(await pair.reserveNix()).to.equal(seed + nixIn);
+    expect(await pair.reserveToken()).to.equal(liquidityTokens + 4_000n * ONE);
+
+    const shares = await pair.liquidityOf(alice.address);
+    expect(shares).to.be.greaterThan(200n);
+    const nixBefore = await nix.balanceOf(alice.address);
+    const tokenBefore = await token.balanceOf(alice.address);
+    await pair.connect(alice).removeLiquidity(200);
+    expect(await nix.balanceOf(alice.address)).to.be.greaterThan(nixBefore);
+    expect(await token.balanceOf(alice.address)).to.be.greaterThan(tokenBefore);
+
+    await pair.connect(alice).removeLiquidity(await pair.liquidityOf(alice.address));
+    expect(await pair.liquidityOf(alice.address)).to.equal(0n);
+    const dustNix = (await pair.reserveNix()) - seed;
+    const dustToken = (await pair.reserveToken()) - liquidityTokens;
+    expect(dustNix <= 2n).to.equal(true);
+    expect(dustToken <= 2n).to.equal(true);
+
+    const again = await pair.quoteAdd(200n * ONE, 200n * ONE);
+    await nix.connect(alice).approve(pairAddress, again.nixUsed);
+    await token.connect(alice).approve(pairAddress, again.tokenUsed);
+    await pair.connect(alice).addLiquidity(again.nixUsed, again.tokenUsed);
+    await pair.connect(alice).removeLiquidity(await pair.liquidityOf(alice.address));
+    expect(await pair.liquidityOf(alice.address)).to.equal(0n);
+  });
+
   it("swaps against the seeded reserves and enforces the minimum output", async function () {
     const { nix, launchpad, alice, seed } = await deploy();
     const supply = 1_000_000n * ONE;

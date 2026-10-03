@@ -8,14 +8,14 @@ const config = {
   theme: {
     extend: {
       colors: {
-        void: "#070b16",
-        ink: "#101a2e",
-        panel: "#152238",
-        mist: "#93a4b8",
-        frost: "#e8f4fb",
-        "cyan-glow": "#3ef0ff",
-        "cyan-deep": "#0e7490",
-        violet: "#7c5cff",
+        void: "var(--void)",
+        ink: "var(--ink)",
+        panel: "var(--panel)",
+        mist: "var(--mist)",
+        frost: "var(--frost)",
+        "cyan-glow": "var(--cyan-glow)",
+        "cyan-deep": "var(--cyan-deep)",
+        violet: "var(--violet)",
       },
       boxShadow: {
         glow: "0 0 36px rgba(62, 240, 255, 0.38)",

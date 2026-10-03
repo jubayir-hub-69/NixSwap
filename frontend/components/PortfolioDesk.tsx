@@ -1,6 +1,7 @@
 "use client";
 
 import { useConnectModal } from "@rainbow-me/rainbowkit";
+import { ChevronDown } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { erc20Abi } from "viem";
@@ -8,6 +9,7 @@ import { useAccount, useSwitchChain } from "wagmi";
 import { AddToWalletButton } from "@/components/AddToWalletButton";
 import { HistoryDesk } from "@/components/HistoryDesk";
 import { PricedSummary } from "@/components/PricedSummary";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { QrAddress } from "@/components/QrAddress";
 import { TxButtonContent } from "@/components/TxButton";
@@ -15,49 +17,18 @@ import { TxNotice } from "@/components/TxNotice";
 import { useChainTx } from "@/hooks/useChainTx";
 import { useChainHoldings, type Holding } from "@/hooks/useChainHoldings";
 import { decimalInput, formatBalance, formatUnits, parseUnits, plainUnits } from "@/lib/amount";
-import { bridgeChain, bridgeChains, parseWalletAddress } from "@/lib/bridge";
+import { bridgeChain, parseWalletAddress } from "@/lib/bridge";
 import { errorText, preferredChainId } from "@/lib/deployment";
 import { shortAddress } from "@/lib/markets";
 import { isWalletProvider, switchWalletChain } from "@/lib/walletChain";
 
 const fieldClass = "mt-1 w-full rounded-2xl border border-white/10 bg-ink px-3 py-3 text-sm text-frost";
 const buttonClass = "btn-primary min-h-11 rounded-2xl px-4 py-2.5 text-sm font-semibold";
-const ghostClass = "btn-ghost min-h-11 rounded-2xl px-4 py-2.5 text-sm";
 
 type Selection = { chainId: number; token: `0x${string}`; mode: "send" | "receive" };
 
 function findHolding(holdings: Holding[], token: `0x${string}`) {
   return holdings.find((item) => item.address.toLowerCase() === token.toLowerCase());
-}
-
-function AssetActions({
-  chainId,
-  holding,
-  connectedHere,
-  walletConnected,
-  busy,
-  onSend,
-  onReceive,
-}: {
-  chainId: number;
-  holding: Holding;
-  connectedHere: boolean;
-  walletConnected: boolean;
-  busy: boolean;
-  onSend: () => void;
-  onReceive: () => void;
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <button type="button" className={ghostClass} disabled={busy} onClick={onSend}>
-        {connectedHere ? "Send" : walletConnected ? "Switch to send" : "Send"}
-      </button>
-      <button type="button" className={ghostClass} disabled={busy} onClick={onReceive}>
-        Receive
-      </button>
-      <AddToWalletButton token={holding.address} chainId={chainId} className="min-h-11 rounded-2xl px-2 text-sm text-cyan-glow disabled:opacity-40" />
-    </div>
-  );
 }
 
 function SendPanel({
@@ -236,157 +207,149 @@ function ReceivePanel({
   );
 }
 
-function ChainBook({
-  chainId,
-  walletChainId,
-  walletConnected,
-  selection,
-  busy,
-  onSelect,
-  onSwitch,
-  onConnect,
-}: {
-  chainId: number;
-  walletChainId: number | undefined;
-  walletConnected: boolean;
-  selection: Selection | null;
-  busy: boolean;
-  onSelect: (next: Selection) => void;
-  onSwitch: (chainId: number, next?: Selection) => void;
-  onConnect: () => void;
-}) {
-  const book = useChainHoldings(chainId);
-  const chain = bridgeChain(chainId);
-  const connectedHere = walletChainId === chainId;
-  const title = chain?.name ?? book.network ?? "Network";
+const networkFilters = [
+  { id: "all", label: "All Networks" },
+  { id: "421614", label: "Arbitrum Sepolia" },
+  { id: "84532", label: "Base Sepolia" },
+  { id: "11155111", label: "Ethereum Sepolia" },
+] as const;
 
+type NetworkFilter = (typeof networkFilters)[number]["id"];
+
+const chainTint: Record<number, string> = {
+  421614: "bg-cyan-glow/10 text-cyan-glow",
+  84532: "bg-violet/15 text-violet",
+  11155111: "bg-white/10 text-frost",
+};
+
+function TokenMark({ symbol }: { symbol: string }) {
+  const letter = symbol.trim().slice(0, 1).toUpperCase() || "?";
   return (
-    <section className="glass-panel rounded-[28px] p-4 sm:p-5" data-testid={`portfolio-${chainId}`}>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold text-frost">{title}</h2>
-          <p className="mt-1 text-[11px] text-mist">{connectedHere ? "Connected network" : "Switch here to send"}</p>
-        </div>
-        {connectedHere ? (
-          <span className="rounded-full bg-cyan-glow/10 px-2 py-1 text-[11px] text-cyan-glow">Live</span>
-        ) : (
-          <button type="button" className={ghostClass} disabled={busy} onClick={() => onSwitch(chainId)}>
-            Switch
-          </button>
-        )}
-      </div>
-      {!book.deployed ? (
-        <p className="mt-4 text-sm text-mist">NixSwap is not deployed on {title}.</p>
-      ) : book.loading && book.holdings.length === 0 ? (
-        <p className="mt-4 text-sm text-mist">Reading on-chain balances…</p>
-      ) : book.launchError && book.holdings.length === 0 ? (
-        <p className="mt-4 text-sm text-rose-300">Could not read the token list on {title}.</p>
-      ) : book.holdings.length === 0 ? (
-        <p className="mt-4 text-sm text-mist">No NIX, bridge token, or launched token is deployed on {title}.</p>
-      ) : (
-        <div className="mt-4 divide-y divide-white/5">
-          {book.holdings.map((holding) => {
-            const symbol = holding.symbol ?? (holding.loading ? "Reading…" : shortAddress(holding.address));
-            return (
-              <article key={holding.address} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-frost">{symbol}</p>
-                  <p className="mt-0.5 text-[11px] text-mist">
-                    {holding.name ?? "ERC-20"} · {shortAddress(holding.address)}
-                  </p>
-                </div>
-                <p className="text-sm text-frost" data-testid={`balance-${holding.address}`}>
-                  {formatBalance(
-                    walletConnected,
-                    holding.loading,
-                    holding.error ||
-                      (walletConnected && !holding.loading && (holding.decimals === undefined || holding.balance === undefined)),
-                    holding.balance,
-                    holding.decimals ?? 18,
-                  )}{" "}
-                  {holding.decimals !== undefined ? (holding.symbol ?? "") : ""}
-                </p>
-                <AssetActions
-                  chainId={chainId}
-                  holding={holding}
-                  connectedHere={connectedHere}
-                  walletConnected={walletConnected}
-                  busy={busy}
-                  onSend={() => {
-                    if (!walletConnected) onConnect();
-                    else if (!connectedHere) onSwitch(chainId, { chainId, token: holding.address, mode: "send" });
-                    else onSelect({ chainId, token: holding.address, mode: "send" });
-                  }}
-                  onReceive={() => {
-                    if (!walletConnected) onConnect();
-                    else if (!connectedHere) onSwitch(chainId, { chainId, token: holding.address, mode: "receive" });
-                    else onSelect({ chainId, token: holding.address, mode: "receive" });
-                  }}
-                />
-              </article>
-            );
-          })}
-        </div>
-      )}
-      {book.bridgeError ? <p className="mt-2 text-xs text-rose-300">The bridge token list on {title} could not be read.</p> : null}
-      {book.bridgeOverflow ? (
-        <p className="mt-2 text-xs text-rose-300">This bridge lists more tokens than the portfolio can read.</p>
-      ) : null}
-      {selection?.chainId === chainId && selection.mode === "send" ? (
-        <div className="mt-2">
-          {(() => {
-            const holding = findHolding(book.holdings, selection.token);
-            return holding ? (
-              <SendPanel chainId={chainId} chainName={title} holding={holding} onClose={() => onSelect(selection)} />
-            ) : (
-              <p className="text-sm text-mist">That token is no longer in the on-chain list.</p>
-            );
-          })()}
-        </div>
-      ) : null}
-    </section>
+    <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-cyan-glow/10 text-sm font-semibold text-frost">
+      {letter}
+    </span>
   );
 }
 
-function SendChooser({
-  chainId,
-  busy,
-  onPick,
-}: {
+type TokenRow = {
   chainId: number;
-  busy: boolean;
-  onPick: (next: Selection) => void;
-}) {
-  const book = useChainHoldings(chainId);
-  const title = bridgeChain(chainId)?.name ?? book.network ?? "Network";
+  network: string;
+  holding: Holding;
+};
+
+function exactBalance(holding: Holding) {
+  if (holding.error) return "Unavailable";
+  if (holding.balance === undefined || holding.decimals === undefined) return holding.loading ? "Reading…" : "Unavailable";
+  const exact = plainUnits(holding.balance, holding.decimals);
+  const dot = exact.indexOf(".");
+  const whole = dot === -1 ? exact : exact.slice(0, dot);
+  const fraction = dot === -1 ? "" : exact.slice(dot);
+  return `${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}${fraction}`;
+}
+
+function holdsBalance(holding: Holding) {
+  if (holding.error) return true;
+  if (holding.balance === 0n) return false;
+  return true;
+}
+
+function NetworkFilterMenu({ value, onChange }: { value: NetworkFilter; onChange: (next: NetworkFilter) => void }) {
+  const current = networkFilters.find((item) => item.id === value) ?? networkFilters[0];
   return (
-    <section className="glass-panel rounded-[28px] p-4">
-      <h2 className="text-sm font-semibold text-frost">{title}</h2>
-      {book.loading && book.holdings.length === 0 ? <p className="mt-3 text-sm text-mist">Reading on-chain balances…</p> : null}
-      {!book.loading && book.holdings.length === 0 ? <p className="mt-3 text-sm text-mist">No token on {title}.</p> : null}
-      <div className="mt-3 flex flex-col gap-2">
-        {book.holdings.map((holding) => (
-          <button
-            key={holding.address}
-            type="button"
-            disabled={busy}
-            className="flex items-center justify-between rounded-2xl border border-white/10 px-3 py-3 text-left text-sm text-frost disabled:opacity-40"
-            onClick={() => onPick({ chainId, token: holding.address, mode: "send" })}
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        type="button"
+        data-testid="portfolio-network"
+        className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 text-xs font-medium text-frost outline-none transition hover:border-cyan-glow/40"
+      >
+        {current.label}
+        <ChevronDown className="h-3.5 w-3.5 text-mist" aria-hidden="true" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {networkFilters.map((item) => (
+          <DropdownMenuItem
+            key={item.id}
+            data-testid={`portfolio-network-${item.id}`}
+            className={item.id === value ? "text-cyan-glow" : undefined}
+            onSelect={() => onChange(item.id)}
           >
-            <span>{holding.symbol ?? shortAddress(holding.address)}</span>
-            <span>
-              {formatBalance(
-                true,
-                holding.loading,
-                holding.error,
-                holding.balance,
-                holding.decimals ?? 18,
-              )}
-            </span>
-          </button>
+            {item.label}
+          </DropdownMenuItem>
         ))}
-      </div>
-    </section>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function HoldingsList({
+  rows,
+  connected,
+  walletChainId,
+  busy,
+  onSend,
+  onReceive,
+}: {
+  rows: TokenRow[];
+  connected: boolean;
+  walletChainId: number | undefined;
+  busy: boolean;
+  onSend: (next: Selection) => void;
+  onReceive: (next: Selection) => void;
+}) {
+  return (
+    <div className="mt-2 divide-y divide-white/5">
+      {rows.map((row) => {
+        const symbol = row.holding.symbol ?? (row.holding.loading ? "Reading…" : shortAddress(row.holding.address));
+        const here = walletChainId === row.chainId;
+        return (
+          <article
+            key={`${row.chainId}-${row.holding.address}`}
+            className="flex items-center gap-3 py-3.5"
+            data-testid={`holding-${row.chainId}-${row.holding.address}`}
+          >
+            <TokenMark symbol={symbol} />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm font-semibold text-frost">{symbol}</p>
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${chainTint[row.chainId] ?? "bg-white/10 text-mist"}`}>
+                  {row.network}
+                </span>
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                <button
+                  type="button"
+                  className="text-cyan-glow disabled:opacity-40"
+                  disabled={busy}
+                  onClick={() => onSend({ chainId: row.chainId, token: row.holding.address, mode: "send" })}
+                >
+                  {connected && !here ? "Switch to send" : "Send"}
+                </button>
+                <button
+                  type="button"
+                  className="text-cyan-glow disabled:opacity-40"
+                  disabled={busy}
+                  onClick={() => onReceive({ chainId: row.chainId, token: row.holding.address, mode: "receive" })}
+                >
+                  Receive
+                </button>
+                <AddToWalletButton
+                  token={row.holding.address}
+                  chainId={row.chainId}
+                  className="text-xs text-mist disabled:opacity-40"
+                />
+              </div>
+            </div>
+            <p
+              className="shrink-0 text-right text-sm font-medium tabular-nums text-frost"
+              data-testid={`balance-${row.chainId}-${row.holding.address}`}
+            >
+              {connected ? exactBalance(row.holding) : "Connect to read"}
+              {connected && row.holding.symbol && row.holding.decimals !== undefined ? ` ${row.holding.symbol}` : ""}
+            </p>
+          </article>
+        );
+      })}
+    </div>
   );
 }
 
@@ -400,38 +363,82 @@ export function PortfolioDesk() {
   const { switchChain, isPending: switching } = useSwitchChain();
   const [selection, setSelection] = useState<Selection | null>(null);
   const [pending, setPending] = useState<Selection | null>(null);
+  const [network, setNetwork] = useState<NetworkFilter>("all");
   const [switchingChain, setSwitchingChain] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
-
-  // Open send or receive only after the wallet reports the chain that action needs.
-  if (pending && chainId === pending.chainId) {
-    setSelection(pending);
-    setPending(null);
-  }
+  const arbitrumBook = useChainHoldings(421614);
+  const baseBook = useChainHoldings(84532);
+  const ethereumBook = useChainHoldings(11155111);
+  const books = [arbitrumBook, baseBook, ethereumBook];
+  const shown = pending && chainId === pending.chainId ? pending : pending ? null : selection;
+  const connected = Boolean(isConnected && address);
+  const filterLabel = networkFilters.find((item) => item.id === network)?.label ?? "All Networks";
+  const filteredBooks = books.filter((book) => network === "all" || String(book.chainId) === network);
+  const rows = filteredBooks
+    .flatMap((book) => {
+      const name = bridgeChain(book.chainId)?.name ?? book.network ?? "Network";
+      return book.holdings.filter(holdsBalance).map((holding) => ({ chainId: book.chainId, network: name, holding }));
+    })
+    .sort((left, right) => {
+      const symbol = (left.holding.symbol ?? left.holding.address).localeCompare(right.holding.symbol ?? right.holding.address);
+      return symbol === 0 ? left.chainId - right.chainId : symbol;
+    });
+  const stillReading =
+    connected &&
+    rows.length === 0 &&
+    filteredBooks.some((book) => book.loading || book.holdings.some((holding) => holding.loading && holding.balance === undefined));
+  const notes = filteredBooks.flatMap((book) => {
+    const name = bridgeChain(book.chainId)?.name ?? "This network";
+    const lines: string[] = [];
+    if (!book.deployed) lines.push(`NixSwap is not deployed on ${name}.`);
+    if (book.launchError) lines.push(`Could not read the token list on ${name}.`);
+    if (book.bridgeError) lines.push(`The bridge token list on ${name} could not be read.`);
+    if (book.bridgeOverflow) lines.push(`${name} lists more bridge tokens than the portfolio can read.`);
+    return lines;
+  });
+  const activeBook = books.find((book) => book.chainId === shown?.chainId);
+  const activeHolding = shown ? findHolding(activeBook?.holdings ?? [], shown.token) : undefined;
+  const activeChain = bridgeChain(shown?.chainId);
+  const activeSymbol = activeHolding?.symbol ?? "tokens";
 
   async function switchTo(nextChainId: number, next?: Selection) {
     setSwitchError(null);
     setSwitchingChain(true);
+    if (next) setPending(next);
     try {
       const provider = await connector?.getProvider();
       if (isWalletProvider(provider)) await switchWalletChain(provider, nextChainId);
       else switchChain({ chainId: nextChainId });
-      if (next) setPending(next);
     } catch (error) {
+      if (next) setPending(null);
       setSwitchError(errorText(error));
     } finally {
       setSwitchingChain(false);
     }
   }
-  const selectedChain = bridgeChain(selection?.chainId);
-  const selectedBook = useChainHoldings(selection?.chainId ?? preferredChainId);
-  const selectedHolding = selection ? findHolding(selectedBook.holdings, selection.token) : undefined;
-  const receiveSymbol = selectedHolding?.symbol ?? "tokens";
 
-  function choose(next: Selection) {
-    setSelection((current) =>
-      current && current.chainId === next.chainId && current.token === next.token && current.mode === next.mode ? null : next,
-    );
+  function closePanel() {
+    setSelection(null);
+    setPending(null);
+  }
+
+  function openAsset(next: Selection) {
+    const current = pending ?? selection;
+    if (current && current.chainId === next.chainId && current.token === next.token && current.mode === next.mode) {
+      closePanel();
+      return;
+    }
+    if (!connected) {
+      openConnectModal?.();
+      return;
+    }
+    if (chainId !== next.chainId) {
+      setSelection(null);
+      void switchTo(next.chainId, next);
+      return;
+    }
+    setPending(null);
+    setSelection(next);
   }
 
   return (
@@ -439,9 +446,9 @@ export function PortfolioDesk() {
       <section className="glass-panel rounded-[28px] p-5">
         <h1 className="text-lg font-semibold tracking-tight">Portfolio</h1>
         <p className="mt-1 text-xs leading-5 text-mist">
-          Balances are read from the wallet on each NixSwap network. NIX, bridge-registered tokens, and launched tokens
-          are included when those contracts are deployed. A token such as OVA is listed only when that chain returns
-          its address. Nothing here is a sample balance.
+          Balances are read from this wallet on Arbitrum Sepolia, Base Sepolia, and Ethereum Sepolia. All Networks lists
+          every token with a balance. Pick one network to see only that chain. NIX, bridge-registered tokens, and launched
+          tokens appear when those contracts are deployed and the balance read succeeds.
         </p>
         {!isConnected || !address ? (
           <button type="button" className={`${buttonClass} mt-4`} onClick={() => openConnectModal?.()}>
@@ -475,47 +482,85 @@ export function PortfolioDesk() {
           </TabsTrigger>
         </TabsList>
         <TabsContent value="assets" className="mt-4 flex flex-col gap-4">
-          <PricedSummary showAllocation />
-          {selection?.mode === "receive" && address && selectedChain ? (
-            <ReceivePanel
-              chainName={selectedChain.name}
-              symbol={receiveSymbol}
-              address={address}
-              onClose={() => setSelection(null)}
-            />
+          {network !== "all" && chainId === Number(network) ? <PricedSummary showAllocation /> : null}
+          {pending && !shown ? (
+            <p className="text-sm text-mist">Switching to {bridgeChain(pending.chainId)?.name ?? "that network"}…</p>
           ) : null}
-          {bridgeChains.map((chain) => (
-            <ChainBook
-              key={chain.chainId}
-              chainId={chain.chainId}
-              walletChainId={isConnected ? chainId : undefined}
-              walletConnected={Boolean(isConnected && address)}
-              selection={selection?.mode === "send" ? selection : null}
-              busy={switching || switchingChain}
-              onSelect={choose}
-              onSwitch={(next, follow) => void switchTo(next, follow)}
-              onConnect={() => openConnectModal?.()}
-            />
-          ))}
+          {shown?.mode === "receive" && address && activeChain ? (
+            <ReceivePanel chainName={activeChain.name} symbol={activeSymbol} address={address} onClose={closePanel} />
+          ) : null}
+          {shown?.mode === "send" && activeHolding && activeChain ? (
+            <SendPanel chainId={shown.chainId} chainName={activeChain.name} holding={activeHolding} onClose={closePanel} />
+          ) : null}
+          {shown?.mode === "send" && !activeHolding ? (
+            <p className="text-sm text-mist">That token is no longer in the on-chain list.</p>
+          ) : null}
+          <section className="glass-panel rounded-[28px] px-4 py-4 sm:px-5" data-testid="portfolio-holdings">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-frost">Tokens</h2>
+                <p className="mt-1 text-[11px] text-mist">
+                  {connected && rows.length > 0 ? `${rows.length} with a balance` : filterLabel}
+                </p>
+              </div>
+              <NetworkFilterMenu value={network} onChange={setNetwork} />
+            </div>
+            {!connected ? (
+              <p className="py-8 text-sm text-mist">
+                Connect a wallet to read balances on Arbitrum Sepolia, Base Sepolia, and Ethereum Sepolia.
+              </p>
+            ) : stillReading ? (
+              <p className="py-8 text-sm text-mist">Reading balances…</p>
+            ) : rows.length === 0 ? (
+              <p className="py-8 text-sm text-mist">This wallet has no token balance on {filterLabel}.</p>
+            ) : (
+              <HoldingsList
+                rows={rows}
+                connected={connected}
+                walletChainId={chainId}
+                busy={switching || switchingChain}
+                onSend={openAsset}
+                onReceive={openAsset}
+              />
+            )}
+            {notes.map((note) => (
+              <p key={note} className="mt-2 text-xs leading-5 text-rose-300">
+                {note}
+              </p>
+            ))}
+          </section>
         </TabsContent>
         <TabsContent value="send" className="mt-4 flex flex-col gap-4">
-          {selection?.mode === "send" && selectedHolding && selectedChain ? (
-            <SendPanel chainId={selection.chainId} chainName={selectedChain.name} holding={selectedHolding} onClose={() => setSelection(null)} />
+          {pending && !shown ? (
+            <p className="text-sm text-mist">Switching to {bridgeChain(pending.chainId)?.name ?? "that network"}…</p>
+          ) : null}
+          {shown?.mode === "send" && activeHolding && activeChain ? (
+            <SendPanel chainId={shown.chainId} chainName={activeChain.name} holding={activeHolding} onClose={closePanel} />
           ) : (
-            <p className="text-sm text-mist">Choose an asset. The wallet switches to that asset&apos;s network before the send form opens.</p>
+            <p className="text-sm text-mist">Choose a token. The wallet switches to that token&apos;s network before the send form opens.</p>
           )}
-          {bridgeChains.map((chain) => (
-            <SendChooser
-              key={chain.chainId}
-              chainId={chain.chainId}
-              busy={switching || switchingChain}
-              onPick={(next) => {
-                if (!isConnected || !address) openConnectModal?.();
-                else if (chainId !== next.chainId) void switchTo(next.chainId, next);
-                else setSelection(next);
-              }}
-            />
-          ))}
+          <section className="glass-panel rounded-[28px] px-4 py-4 sm:px-5">
+            <div className="flex items-start justify-between gap-3">
+              <h2 className="text-sm font-semibold text-frost">Choose a token</h2>
+              <NetworkFilterMenu value={network} onChange={setNetwork} />
+            </div>
+            {!connected ? (
+              <p className="py-8 text-sm text-mist">Connect a wallet to choose a token.</p>
+            ) : stillReading ? (
+              <p className="py-8 text-sm text-mist">Reading balances…</p>
+            ) : rows.length === 0 ? (
+              <p className="py-8 text-sm text-mist">This wallet has no token balance on {filterLabel}.</p>
+            ) : (
+              <HoldingsList
+                rows={rows}
+                connected={connected}
+                walletChainId={chainId}
+                busy={switching || switchingChain}
+                onSend={openAsset}
+                onReceive={openAsset}
+              />
+            )}
+          </section>
         </TabsContent>
         <TabsContent value="receive" className="mt-4">
           {address && bridgeChain(chainId) ? (

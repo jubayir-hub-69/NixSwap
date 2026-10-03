@@ -4,6 +4,8 @@ import { headers } from "next/headers";
 import "@rainbow-me/rainbowkit/styles.css";
 import "./globals.css";
 import { Navbar } from "@/components/Navbar";
+import { SiteFooter } from "@/components/SiteFooter";
+import { ThemeProvider } from "@/components/ThemeProvider";
 import { Providers } from "./providers";
 
 const geistSans = Geist({
@@ -28,16 +30,22 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
       <body className="flex min-h-dvh flex-col font-sans">
-        <div className="atmosphere" aria-hidden="true" />
-        <div className="relative z-10 flex min-h-dvh flex-1 flex-col">
-          <Providers cookie={cookie}>
-            <Navbar />
-            {children}
-          </Providers>
-        </div>
+        <ThemeProvider>
+          <div className="atmosphere" aria-hidden="true" />
+          <div className="relative z-10 flex min-h-dvh flex-1 flex-col">
+            <Providers cookie={cookie}>
+              <div className="flex min-h-dvh flex-col">
+                <Navbar />
+                <div className="flex flex-1 flex-col">{children}</div>
+                <SiteFooter />
+              </div>
+            </Providers>
+          </div>
+        </ThemeProvider>
       </body>
     </html>
   );

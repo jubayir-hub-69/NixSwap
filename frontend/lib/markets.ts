@@ -152,9 +152,11 @@ export function quoteAdd(
   totalLiquidity: bigint,
 ) {
   if (nixAmount <= 0n || tokenAmount <= 0n) return null;
-  if (totalLiquidity === 0n || reserveNix === 0n || reserveToken === 0n) {
+  if (totalLiquidity === 0n) {
+    if (reserveNix !== 0n || reserveToken !== 0n) return null;
     return { nix: nixAmount, token: tokenAmount };
   }
+  if (reserveNix <= 0n || reserveToken <= 0n) return null;
   const nixShares = (nixAmount * totalLiquidity) / reserveNix;
   const tokenShares = (tokenAmount * totalLiquidity) / reserveToken;
   const shares = nixShares < tokenShares ? nixShares : tokenShares;

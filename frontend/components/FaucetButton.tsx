@@ -80,7 +80,7 @@ export function FaucetButton() {
         if (!isConnected) openConnectModal?.();
         else void claim();
       }}
-      className="btn-ghost inline-flex h-10 items-center rounded-full px-3 text-xs font-semibold"
+      className="btn-ghost inline-flex h-10 shrink-0 items-center rounded-full px-2.5 text-xs font-semibold sm:px-3"
     >
       {label}
       <span className="sr-only">{tx.phase ?? tx.error ?? ""}</span>

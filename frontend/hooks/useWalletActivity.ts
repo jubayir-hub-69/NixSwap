@@ -1,38 +1,28 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { createPublicClient, erc20Abi, getAddress, http, parseAbiItem, type AbiEvent, type Address, type PublicClient } from "viem";
+import { createPublicClient, erc20Abi, getAddress, http, type Address, type PublicClient } from "viem";
 import { abis } from "@/config/contracts";
-import { baseSepoliaChain, ethereumSepoliaChain, arbitrumSepoliaChain, transports } from "@/config/chains";
-import { classifyReceipt, tokenAddressesIn, type ActivityDraft, type TokenMeta } from "@/lib/activity";
+import { arbitrumSepoliaChain, baseSepoliaChain, ethereumSepoliaChain, transports } from "@/config/chains";
+import {
+  classifyReceipt,
+  tokenAddressesIn,
+  type ActivityDraft,
+  type ActivityKind,
+  type TokenMeta,
+} from "@/lib/activity";
 import { bridgeChains, configOf } from "@/lib/bridge";
 import { deploymentFor, transactionUrl } from "@/lib/deployment";
 import { parseLaunches } from "@/lib/markets";
 
 const CHAINS = [arbitrumSepoliaChain, baseSepoliaChain, ethereumSepoliaChain] as const;
-const CHUNK = 40_000n;
-const MAX_CHUNKS = 25;
 const PER_CHAIN = 30;
 
-const transferEvent = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)");
-const liquidityAdded = parseAbiItem(
-  "event LiquidityAdded(address indexed provider, uint256 nixAmount, uint256 tokenAmount, uint256 shares, uint256 priceX18)",
-);
-const liquidityRemoved = parseAbiItem(
-  "event LiquidityRemoved(address indexed provider, uint256 nixAmount, uint256 tokenAmount, uint256 shares, uint256 priceX18)",
-);
-const swapEvent = parseAbiItem(
-  "event Swap(address indexed sender, address indexed recipient, address indexed tokenIn, uint256 amountIn, uint256 amountOut, uint256 priceX18)",
-);
-const swapFilled = parseAbiItem(
-  "event SwapFilled(uint256 indexed intentId, address indexed user, address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOut)",
-);
-const intentSubmitted = parseAbiItem(
-  "event IntentSubmitted(uint256 indexed intentId, address indexed user, uint8 intentType, address solver, uint64 expiresAt)",
-);
-const tokenLaunched = parseAbiItem(
-  "event TokenLaunched(uint256 indexed id, address indexed creator, address token, address pair)",
-);
+const EXPLORERS: Record<number, string> = {
+  421614: "https://arbitrum-sepolia.blockscout.com",
+  84532: "https://base-sepolia.blockscout.com",
+  11155111: "https://eth-sepolia.blockscout.com",
+};
 
 export type WalletActivity = ActivityDraft & {
   id: string;
@@ -41,20 +31,21 @@ export type WalletActivity = ActivityDraft & {
   hash: `0x${string}`;
   timestamp: number | null;
   url?: string;
+  reverted: boolean;
 };
 
-type Hit = { hash: `0x${string}`; blockNumber: bigint };
+type IndexedTx = {
+  hash: `0x${string}`;
+  timestamp: number | null;
+  reverted: boolean;
+  method: string | null;
+};
 
 function clientFor(chainId: number) {
   const chain = CHAINS.find((item) => item.id === chainId);
   const url = transports[chainId as keyof typeof transports];
   if (!chain || !url) return undefined;
   return createPublicClient({ chain, transport: http(url) });
-}
-
-function isRangeError(error: unknown) {
-  const text = error instanceof Error ? error.message : String(error);
-  return /range|block range|too many|exceed|limit|timeout|more than|query returned more|header not found/i.test(text);
 }
 
 function pushToken(list: Address[], token: string | undefined) {
@@ -76,10 +67,6 @@ async function discover(client: PublicClient, chainId: number) {
       : undefined;
   const bridge =
     deployment?.NixBridge && /^0x[0-9a-fA-F]{40}$/.test(deployment.NixBridge) ? getAddress(deployment.NixBridge) : undefined;
-  const registry =
-    deployment?.IntentRegistry && /^0x[0-9a-fA-F]{40}$/.test(deployment.IntentRegistry)
-      ? getAddress(deployment.IntentRegistry)
-      : undefined;
   if (nix) pushToken(tokens, nix);
 
   if (launchpad) {
@@ -91,7 +78,7 @@ async function discover(client: PublicClient, chainId: number) {
         symbols.set(row.token.toLowerCase(), { symbol: row.symbol, decimals: 18 });
       }
     } catch {
-      // The chain still contributes NIX transfers when the launch list cannot be read.
+      // NIX transfers can still be labeled when the launch list cannot be read.
     }
   }
 
@@ -118,7 +105,7 @@ async function discover(client: PublicClient, chainId: number) {
         if (config?.enabled) pushToken(tokens, config.token);
       }
     } catch {
-      // Bridge tokens are optional. Known launch tokens are still scanned.
+      // Bridge tokens are optional. Known launch tokens are still labeled.
     }
   }
 
@@ -129,7 +116,7 @@ async function discover(client: PublicClient, chainId: number) {
     }),
   );
 
-  return { tokens, pairs, symbols, launchpad, bridge, registry };
+  return { pairs, symbols };
 }
 
 async function readMeta(client: PublicClient, token: Address): Promise<TokenMeta | undefined> {
@@ -146,101 +133,206 @@ async function readMeta(client: PublicClient, token: Address): Promise<TokenMeta
   }
 }
 
-async function pull(
-  client: PublicClient,
-  address: Address | Address[],
-  event: AbiEvent,
-  args: Record<string, unknown> | undefined,
-  fromBlock: bigint,
-  toBlock: bigint,
-): Promise<Hit[]> {
-  if (Array.isArray(address) && address.length === 0) return [];
-  try {
-    const logs = await client.getLogs({ address, event, args, fromBlock, toBlock } as Parameters<PublicClient["getLogs"]>[0]);
-    return logs.flatMap((log) =>
-      log.transactionHash && log.blockNumber !== null ? [{ hash: log.transactionHash, blockNumber: log.blockNumber }] : [],
-    );
-  } catch (error) {
-    if (!isRangeError(error) || toBlock - fromBlock < 1_000n) throw error;
-    const mid = fromBlock + (toBlock - fromBlock) / 2n;
-    const left = await pull(client, address, event, args, fromBlock, mid);
-    const right = await pull(client, address, event, args, mid + 1n, toBlock);
-    return [...left, ...right];
+function asItems(value: unknown): Record<string, unknown>[] {
+  if (!value || typeof value !== "object" || !("items" in value)) return [];
+  const items = (value as { items?: unknown }).items;
+  if (!Array.isArray(items)) return [];
+  return items.flatMap((item) => (item && typeof item === "object" ? [item as Record<string, unknown>] : []));
+}
+
+function readHash(value: unknown): `0x${string}` | undefined {
+  return typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value) ? (value as `0x${string}`) : undefined;
+}
+
+function readTime(value: unknown) {
+  if (typeof value !== "string") return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+}
+
+function methodName(method: string | null) {
+  return (method ?? "").split("(")[0].replace(/^0x/, "").toLowerCase();
+}
+
+function isNoise(method: string | null, types: string[]) {
+  const name = methodName(method);
+  if (name === "approve" || name === "095ea7b3") return true;
+  if (!method && types.length === 1 && types[0] === "coin_transfer") return true;
+  return false;
+}
+
+function kindFromMethod(method: string | null): ActivityKind | undefined {
+  switch (methodName(method)) {
+    case "removeliquidity":
+    case "9c8f9f23":
+      return "Remove liquidity";
+    case "addliquidity":
+    case "9cd441da":
+      return "Add liquidity";
+    case "createtoken":
+    case "5b060530":
+    case "relay":
+    case "be0d56d2":
+    case "finalizeremote":
+    case "59eb1b30":
+    case "retire":
+    case "3790cf57":
+      return "Launch";
+    case "submitswapintent":
+    case "d0a7b1fa":
+    case "submitintent":
+    case "abbe57d9":
+    case "fillswap":
+    case "swap":
+      return "Swap";
+    case "send":
+    case "e67f17fb":
+    case "fb9260cf":
+      return "Bridge";
+    case "claimfaucet":
+    case "4fe15335":
+      return "Receive";
+    case "deposit":
+    case "1de26e16":
+      return "Escrow deposit";
+    case "transfer":
+    case "a9059cbb":
+      return "Send";
+    default:
+      return undefined;
   }
 }
 
-async function scanChain(client: PublicClient, chainId: number, user: Address) {
-  const discovered = await discover(client, chainId);
-  const latest = await client.getBlockNumber();
-  const found = new Map<string, Hit>();
-  let to = latest;
-  for (let chunk = 0; chunk < MAX_CHUNKS && found.size < PER_CHAIN; chunk += 1) {
-    const from = to > CHUNK ? to - CHUNK + 1n : 0n;
-    const queries: Promise<Hit[]>[] = [];
-    if (discovered.tokens.length > 0) {
-      queries.push(pull(client, discovered.tokens, transferEvent, { from: user }, from, to));
-      queries.push(pull(client, discovered.tokens, transferEvent, { to: user }, from, to));
-    }
-    const pairAddresses = [...discovered.pairs.keys()].map((item) => getAddress(item));
-    if (pairAddresses.length > 0) {
-      queries.push(pull(client, pairAddresses, liquidityAdded, { provider: user }, from, to));
-      queries.push(pull(client, pairAddresses, liquidityRemoved, { provider: user }, from, to));
-      queries.push(pull(client, pairAddresses, swapEvent, { recipient: user }, from, to));
-      queries.push(pull(client, pairAddresses, swapEvent, { sender: user }, from, to));
-    }
-    if (discovered.launchpad) {
-      queries.push(pull(client, discovered.launchpad, tokenLaunched, { creator: user }, from, to));
-    }
-    if (discovered.registry) {
-      queries.push(pull(client, discovered.registry, swapFilled, { user }, from, to));
-      queries.push(pull(client, discovered.registry, intentSubmitted, { user }, from, to));
-    }
-    if (queries.length === 0) break;
-    const batches = await Promise.all(queries);
-    for (const hit of batches.flat()) found.set(hit.hash, hit);
-    if (from === 0n) break;
-    to = from - 1n;
+const EXPLORER_PAGES = 3;
+
+function pageQuery(value: unknown) {
+  if (!value || typeof value !== "object" || !("next_page_params" in value)) return "";
+  const params = (value as { next_page_params?: unknown }).next_page_params;
+  if (!params || typeof params !== "object") return "";
+  const search = new URLSearchParams();
+  for (const [key, entry] of Object.entries(params)) {
+    if (typeof entry === "string" || typeof entry === "number") search.set(key, String(entry));
   }
-  return { hits: [...found.values()], discovered };
+  const text = search.toString();
+  return text ? `?${text}` : "";
+}
+
+async function explorerItems(url: string) {
+  const collected: Record<string, unknown>[] = [];
+  let next = url;
+  for (let page = 0; page < EXPLORER_PAGES && next; page += 1) {
+    const response = await fetch(next);
+    if (!response.ok) {
+      if (page === 0) throw new Error(`Explorer returned ${response.status}.`);
+      break;
+    }
+    const payload: unknown = await response.json();
+    collected.push(...asItems(payload));
+    const query = pageQuery(payload);
+    next = query ? `${url.split("?")[0]}${query}` : "";
+  }
+  return collected;
+}
+
+function transferHash(item: Record<string, unknown>) {
+  const nested = item.transaction;
+  const nestedHash =
+    nested && typeof nested === "object" ? readHash((nested as Record<string, unknown>).hash) : undefined;
+  return readHash(item.transaction_hash) ?? readHash(item.tx_hash) ?? nestedHash;
+}
+
+async function indexedTransactions(chainId: number, user: Address): Promise<IndexedTx[]> {
+  const base = EXPLORERS[chainId];
+  if (!base) throw new Error("No explorer is configured.");
+  const [txs, transfers] = await Promise.all([
+    explorerItems(`${base}/api/v2/addresses/${user}/transactions`),
+    explorerItems(`${base}/api/v2/addresses/${user}/token-transfers`).catch(() => [] as Record<string, unknown>[]),
+  ]);
+  const transferHashes = new Set<string>();
+  for (const item of transfers) {
+    const hash = transferHash(item);
+    if (hash) transferHashes.add(hash.toLowerCase());
+  }
+  const byHash = new Map<string, IndexedTx>();
+  for (const item of txs) {
+    const hash = readHash(item.hash);
+    if (!hash) continue;
+    const method = typeof item.method === "string" ? item.method : null;
+    const types = Array.isArray(item.transaction_types)
+      ? item.transaction_types.filter((entry): entry is string => typeof entry === "string")
+      : [];
+    if (!transferHashes.has(hash.toLowerCase()) && isNoise(method, types)) continue;
+    byHash.set(hash.toLowerCase(), {
+      hash,
+      timestamp: readTime(item.timestamp),
+      reverted: item.status === "error",
+      method,
+    });
+  }
+  for (const item of transfers) {
+    const hash = transferHash(item);
+    if (!hash || byHash.has(hash.toLowerCase())) continue;
+    byHash.set(hash.toLowerCase(), {
+      hash,
+      timestamp: readTime(item.timestamp),
+      reverted: false,
+      method: typeof item.method === "string" ? item.method : null,
+    });
+  }
+  return [...byHash.values()].sort((left, right) => (right.timestamp ?? 0) - (left.timestamp ?? 0)).slice(0, PER_CHAIN);
+}
+
+async function mapPool<T, R>(items: T[], limit: number, task: (item: T) => Promise<R>) {
+  const out: R[] = new Array(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      out[index] = await task(items[index]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return out;
 }
 
 async function loadChain(chainId: number, network: string, user: Address): Promise<{ rows: WalletActivity[]; warning?: string }> {
   const client = clientFor(chainId);
   if (!client) return { rows: [], warning: `${network} has no RPC configured.` };
   try {
-    const scanned = await scanChain(client, chainId, user);
-    const stamped = await Promise.all(
-      scanned.hits.map(async (hit) => {
-        try {
-          const block = await client.getBlock({ blockNumber: hit.blockNumber });
-          return { ...hit, timestamp: Number(block.timestamp) };
-        } catch {
-          return { ...hit, timestamp: null as number | null };
-        }
-      }),
-    );
-    stamped.sort((left, right) => (right.timestamp ?? 0) - (left.timestamp ?? 0));
-    const chosen = stamped.slice(0, PER_CHAIN);
-    const rows: WalletActivity[] = [];
-    for (const hit of chosen) {
-      const receipt = await client.getTransactionReceipt({ hash: hit.hash });
-      const logs = receipt.logs.flatMap((log) =>
-        log.topics.length > 0 ? [{ address: log.address, data: log.data, topics: log.topics }] : [],
-      );
-      const missing = tokenAddressesIn(logs).filter((token) => !scanned.discovered.symbols.has(token));
-      await Promise.all(
-        missing.map(async (token) => {
-          const meta = await readMeta(client, getAddress(token));
-          if (meta) scanned.discovered.symbols.set(token, meta);
-        }),
-      );
-      const draft = classifyReceipt(logs, {
-        user,
-        symbols: scanned.discovered.symbols,
-        pairs: scanned.discovered.pairs,
-      });
-      if (!draft) continue;
-      rows.push({
+    const [indexed, discovered] = await Promise.all([indexedTransactions(chainId, user), discover(client, chainId)]);
+    const rows = await mapPool(indexed, 4, async (hit) => {
+      let draft: ActivityDraft | undefined;
+      let reverted = hit.reverted;
+      try {
+        const receipt = await client.getTransactionReceipt({ hash: hit.hash });
+        reverted = reverted || receipt.status === "reverted";
+        const logs = receipt.logs.flatMap((log) =>
+          log.topics.length > 0 ? [{ address: log.address, data: log.data, topics: log.topics }] : [],
+        );
+        const missing = tokenAddressesIn(logs).filter((token) => !discovered.symbols.has(token));
+        await Promise.all(
+          missing.map(async (token) => {
+            const meta = await readMeta(client, getAddress(token));
+            if (meta) discovered.symbols.set(token, meta);
+          }),
+        );
+        draft = classifyReceipt(logs, { user, symbols: discovered.symbols, pairs: discovered.pairs });
+      } catch {
+        draft = undefined;
+      }
+      if (!draft) {
+        const kind = kindFromMethod(hit.method);
+        if (!kind) return undefined;
+        draft = {
+          kind,
+          amountLabel: reverted ? "Reverted" : "Amount unavailable",
+          detail: reverted ? "The transaction reverted before tokens moved." : "Confirmed on this network.",
+        };
+      } else if (reverted) {
+        draft = { ...draft, detail: "The transaction reverted before tokens moved." };
+      }
+      const row: WalletActivity = {
         ...draft,
         id: `${chainId}:${hit.hash}`,
         chainId,
@@ -248,23 +340,29 @@ async function loadChain(chainId: number, network: string, user: Address): Promi
         hash: hit.hash,
         timestamp: hit.timestamp,
         url: transactionUrl(chainId, hit.hash),
-      });
-    }
-    return { rows };
+        reverted,
+      };
+      return row;
+    });
+    return { rows: rows.flatMap((row) => (row ? [row] : [])) };
   } catch (error) {
-    const message = error instanceof Error ? error.message.split("\n")[0] : "The RPC request failed.";
+    const message = error instanceof Error ? error.message.split("\n")[0] : "The activity request failed.";
     return { rows: [], warning: `${network} activity could not be read. ${message}` };
   }
 }
 
+type ActivityResult = { rows: WalletActivity[]; warnings: string[] };
+
 export function useWalletActivity(user: Address | undefined) {
   const account = user ? getAddress(user) : null;
-  const query = useQuery({
+  const query = useQuery<ActivityResult>({
     queryKey: ["wallet-activity", account],
     enabled: account !== null,
-    staleTime: Number.POSITIVE_INFINITY,
-    refetchOnWindowFocus: false,
-    queryFn: async ({ queryKey }) => {
+    staleTime: 10_000,
+    refetchInterval: 15_000,
+    refetchOnWindowFocus: true,
+    placeholderData: (previous) => previous,
+    queryFn: async ({ queryKey }): Promise<ActivityResult> => {
       const current = queryKey[1];
       if (typeof current !== "string") return { rows: [], warnings: [] as string[] };
       const results = await Promise.all(
@@ -273,8 +371,7 @@ export function useWalletActivity(user: Address | undefined) {
       return {
         rows: results
           .flatMap((result) => result.rows)
-          .sort((left, right) => (right.timestamp ?? 0) - (left.timestamp ?? 0))
-          .slice(0, 20),
+          .sort((left, right) => (right.timestamp ?? 0) - (left.timestamp ?? 0)),
         warnings: results.flatMap((result) => (result.warning ? [result.warning] : [])),
       };
     },
@@ -293,7 +390,7 @@ export function useWalletActivity(user: Address | undefined) {
     rows: account ? (query.data?.rows ?? []) : [],
     warnings,
     status: !account ? "idle" : query.isPending ? "loading" : "ready",
-    refreshing: Boolean(account) && query.isFetching,
+    refreshing: Boolean(account) && query.isFetching && !query.isPending,
     reload() {
       void query.refetch();
     },

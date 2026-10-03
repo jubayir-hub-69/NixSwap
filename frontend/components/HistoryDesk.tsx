@@ -6,6 +6,12 @@ import { useWalletActivity } from "@/hooks/useWalletActivity";
 
 const buttonClass = "btn-primary min-h-11 rounded-2xl px-4 py-2.5 text-sm font-semibold";
 
+const explorerName: Record<number, string> = {
+  421614: "Arbiscan",
+  84532: "Basescan",
+  11155111: "Etherscan",
+};
+
 function formatTime(timestamp: number | null) {
   if (timestamp === null) return "Time unavailable";
   return new Intl.DateTimeFormat(undefined, {
@@ -28,8 +34,8 @@ export function HistoryDesk({ embedded = false }: { embedded?: boolean }) {
           <div>
             <h1 className="text-lg font-semibold tracking-tight">History</h1>
             <p className="mt-1 text-xs leading-5 text-mist">
-              The newest on-chain actions for this wallet on Arbitrum Sepolia, Base Sepolia, and Ethereum Sepolia.
-              Sends, receives, swaps, launches, bridge transfers, and liquidity changes are read from the chain.
+              Launches, swaps, bridges, and liquidity changes for this wallet on Arbitrum Sepolia, Base Sepolia, and
+              Ethereum Sepolia. Each row opens the transaction on that network&apos;s explorer.
             </p>
           </div>
           {isConnected && address ? (
@@ -39,7 +45,7 @@ export function HistoryDesk({ embedded = false }: { embedded?: boolean }) {
               disabled={activity.status === "loading" || activity.refreshing}
               onClick={() => activity.reload()}
             >
-              Refresh
+              {activity.refreshing ? "Refreshing…" : "Refresh"}
             </button>
           ) : null}
         </div>
@@ -48,9 +54,7 @@ export function HistoryDesk({ embedded = false }: { embedded?: boolean }) {
             Connect wallet
           </button>
         ) : (
-          <p className="mt-3 text-xs text-mist">
-            Up to 20 matches from recent blocks. Older transactions stay on the block explorer.
-          </p>
+          <p className="mt-3 text-xs text-mist">The list refreshes while this page is open.</p>
         )}
       </section>
 
@@ -64,31 +68,38 @@ export function HistoryDesk({ embedded = false }: { embedded?: boolean }) {
         </section>
       ) : null}
 
-      <section className="glass-panel rounded-[28px] p-4 sm:p-5" data-testid="history-list">
+      <section className="glass-panel rounded-[28px] p-2 sm:p-3" data-testid="history-list">
         {activity.status === "loading" && activity.rows.length === 0 ? (
-          <p className="text-sm text-mist">Reading recent transactions from the chain…</p>
+          <p className="px-3 py-6 text-sm text-mist">Reading this wallet&apos;s transactions…</p>
         ) : null}
-        {activity.status === "idle" ? <p className="text-sm text-mist">Connect a wallet to read its transactions.</p> : null}
+        {activity.status === "idle" ? <p className="px-3 py-6 text-sm text-mist">Connect a wallet to read its transactions.</p> : null}
         {activity.status === "ready" && activity.rows.length === 0 && activity.warnings.length === 0 ? (
-          <p className="text-sm text-mist">No sends, receives, swaps, launches, bridges, or liquidity changes were found in the recent blocks for this wallet.</p>
+          <p className="px-3 py-6 text-sm text-mist">
+            No launches, swaps, bridges, or liquidity changes were found for this wallet.
+          </p>
         ) : null}
         {activity.rows.length > 0 ? (
           <div className="divide-y divide-white/5">
             {activity.rows.map((row) => (
-              <article key={row.id} className="flex flex-col gap-2 py-4 sm:flex-row sm:items-center sm:justify-between" data-testid="history-row">
-                <div className="min-w-0 sm:w-36">
-                  <p className="text-sm font-semibold text-frost">{row.kind}</p>
-                  <p className="mt-0.5 text-[11px] text-mist">{row.network}</p>
+              <article key={row.id} className="flex flex-col gap-3 px-3 py-4 sm:flex-row sm:items-center" data-testid="history-row">
+                <div className="min-w-0 sm:w-40">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-semibold text-frost">{row.kind}</p>
+                    {row.reverted ? (
+                      <span className="rounded-full bg-rose-500/15 px-2 py-0.5 text-[10px] font-medium text-rose-300">Reverted</span>
+                    ) : null}
+                  </div>
+                  <p className="mt-1 text-[11px] text-mist">{row.network}</p>
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm text-frost">{row.amountLabel}</p>
                   <p className="mt-0.5 text-xs leading-5 text-mist">{row.detail}</p>
                 </div>
-                <div className="flex items-center justify-between gap-3 sm:w-44 sm:flex-col sm:items-end">
+                <div className="flex items-center justify-between gap-3 sm:w-36 sm:flex-col sm:items-end">
                   <p className="text-xs text-mist">{formatTime(row.timestamp)}</p>
                   {row.url ? (
                     <a href={row.url} target="_blank" rel="noreferrer" className="text-xs text-cyan-glow">
-                      View transaction
+                      {explorerName[row.chainId] ?? "Explorer"}
                     </a>
                   ) : (
                     <span className="text-xs text-mist">Explorer unavailable</span>

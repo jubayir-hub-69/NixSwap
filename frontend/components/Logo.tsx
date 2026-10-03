@@ -4,16 +4,14 @@ import Link from "next/link";
 export function Logo() {
   return (
     <Link href="/" aria-label="NixSwap" className="inline-flex shrink-0 items-center">
-      <span className="relative block h-12 w-[9.5rem] overflow-hidden rounded-lg">
-        <Image
-          src="/8JwMB.jpg"
-          alt="NixSwap"
-          fill
-          priority
-          sizes="152px"
-          className="object-cover object-center"
-        />
-      </span>
+      <Image
+        src="/logo.png"
+        alt="NixSwap"
+        width={672}
+        height={184}
+        priority
+        className="h-6 w-auto sm:h-8 lg:h-9"
+      />
     </Link>
   );
 }
