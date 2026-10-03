@@ -114,6 +114,229 @@ export function withdrawAction(input: {
   return { action: "withdraw", label: "Withdraw liquidity" };
 }
 
+/**
+ * Deposit fields and the approvals already signed for them.
+ * The pool form reads this after a confirmation refetch or remount, when React state has been cleared.
+ */
+export type PoolAmountDraft = {
+  nix: string;
+  token: string;
+  paidNix: bigint;
+  paidToken: bigint;
+  account: string;
+};
+
+type StoredDraft = {
+  nix: string;
+  token: string;
+  paidNix: string;
+  paidToken: string;
+  account: string;
+  savedAt: number;
+};
+
+const DRAFT_TTL_MS = 30 * 60 * 1000;
+const STORAGE_KEY = "nixswap.poolDrafts.v1";
+const drafts = new Map<string, StoredDraft>();
+const draftSnapshots = new Map<string, PoolAmountDraft>();
+const draftListeners = new Set<() => void>();
+let draftsHydrated = false;
+
+export function subscribePoolDrafts(listener: () => void) {
+  draftListeners.add(listener);
+  return () => {
+    draftListeners.delete(listener);
+  };
+}
+
+function emitDrafts() {
+  for (const listener of draftListeners) listener();
+}
+
+/** Stable snapshot for `useSyncExternalStore`. Server renders stay empty until the client store hydrates. */
+export function poolDraftSnapshot(chainId: number | undefined, pair: string | undefined): PoolAmountDraft | null {
+  hydratePoolDrafts();
+  const key = depositDraftKey(chainId, pair);
+  if (!key) return null;
+  const value = drafts.get(key);
+  if (!value || Date.now() - value.savedAt > DRAFT_TTL_MS) {
+    if (value) drafts.delete(key);
+    draftSnapshots.delete(key);
+    return null;
+  }
+  const next = asDraft(value);
+  const prev = draftSnapshots.get(key);
+  if (
+    prev &&
+    prev.nix === next.nix &&
+    prev.token === next.token &&
+    prev.paidNix === next.paidNix &&
+    prev.paidToken === next.paidToken &&
+    prev.account === next.account
+  ) {
+    return prev;
+  }
+  draftSnapshots.set(key, next);
+  return next;
+}
+
+/**
+ * Fills only a blank side from the reserve ratio.
+ * When both amounts are already set, returns null so a reserve refetch cannot replace them.
+ */
+export function ratioForEmptySide(
+  nixRaw: bigint | null,
+  tokenRaw: bigint | null,
+  reserveNix: bigint | undefined,
+  reserveToken: bigint | undefined,
+): { nix: bigint; token: bigint } | null {
+  if (reserveNix === undefined || reserveToken === undefined || reserveNix <= 0n || reserveToken <= 0n) return null;
+  if (nixRaw && nixRaw > 0n && tokenRaw === null) {
+    const token = ratioOut(nixRaw, reserveNix, reserveToken);
+    return token ? { nix: nixRaw, token } : null;
+  }
+  if (tokenRaw && tokenRaw > 0n && nixRaw === null) {
+    const nix = ratioOut(tokenRaw, reserveToken, reserveNix);
+    return nix ? { nix, token: tokenRaw } : null;
+  }
+  return null;
+}
+
+export function depositDraftKey(chainId: number | undefined, pair: string | undefined) {
+  if (!chainId || !pair) return null;
+  return `${chainId}:${pair.toLowerCase()}`;
+}
+
+/** A wiped field falls back to the draft. A newer typed value wins, including "0". */
+export function displayedAmount(typed: string, saved: string | undefined) {
+  return typed !== "" ? typed : saved ?? "";
+}
+
+function emptyDraft(): StoredDraft {
+  return { nix: "", token: "", paidNix: "0", paidToken: "0", account: "", savedAt: 0 };
+}
+
+function units(value: string) {
+  try {
+    return BigInt(value);
+  } catch {
+    return 0n;
+  }
+}
+
+function asDraft(value: StoredDraft): PoolAmountDraft {
+  return {
+    nix: value.nix,
+    token: value.token,
+    paidNix: units(value.paidNix),
+    paidToken: units(value.paidToken),
+    account: value.account,
+  };
+}
+
+export function hydratePoolDrafts() {
+  if (draftsHydrated || typeof window === "undefined") return;
+  draftsHydrated = true;
+  try {
+    const raw = window.sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as Record<string, StoredDraft>;
+    const now = Date.now();
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!value || typeof value.nix !== "string" || typeof value.token !== "string") continue;
+      if (typeof value.savedAt !== "number" || now - value.savedAt > DRAFT_TTL_MS) continue;
+      if (!drafts.has(key)) drafts.set(key, value);
+    }
+  } catch {
+    // Ignore unreadable session drafts. The in-memory copy still covers this page.
+  }
+}
+
+function persistDrafts() {
+  if (typeof window === "undefined") return;
+  const now = Date.now();
+  const payload: Record<string, StoredDraft> = {};
+  for (const [key, value] of drafts) {
+    if (now - value.savedAt > DRAFT_TTL_MS) continue;
+    payload[key] = value;
+  }
+  try {
+    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    // Private mode can reject storage. The in-memory draft still covers this page.
+  }
+}
+
+export function readPoolDraft(chainId: number | undefined, pair: string | undefined): PoolAmountDraft | null {
+  const key = depositDraftKey(chainId, pair);
+  if (!key) return null;
+  const value = drafts.get(key);
+  if (!value) return null;
+  if (Date.now() - value.savedAt > DRAFT_TTL_MS) {
+    drafts.delete(key);
+    return null;
+  }
+  return asDraft(value);
+}
+
+export function savePoolAmounts(chainId: number | undefined, pair: string | undefined, nix: string, token: string) {
+  const key = depositDraftKey(chainId, pair);
+  if (!key) return;
+  hydratePoolDrafts();
+  const prev = drafts.get(key) ?? emptyDraft();
+  if (!nix && !token && units(prev.paidNix) === 0n && units(prev.paidToken) === 0n) {
+    drafts.delete(key);
+    draftSnapshots.delete(key);
+    persistDrafts();
+    emitDrafts();
+    return;
+  }
+  drafts.set(key, { ...prev, nix, token, savedAt: Date.now() });
+  persistDrafts();
+  emitDrafts();
+}
+
+export function savePoolApproval(
+  chainId: number | undefined,
+  pair: string | undefined,
+  account: string,
+  nix: bigint,
+  token: bigint,
+) {
+  const key = depositDraftKey(chainId, pair);
+  if (!key || !account) return;
+  hydratePoolDrafts();
+  const prev = drafts.get(key) ?? emptyDraft();
+  const paidNix = nix > units(prev.paidNix) ? nix : units(prev.paidNix);
+  const paidToken = token > units(prev.paidToken) ? token : units(prev.paidToken);
+  drafts.set(key, {
+    ...prev,
+    account: account.toLowerCase(),
+    paidNix: paidNix.toString(),
+    paidToken: paidToken.toString(),
+    savedAt: Date.now(),
+  });
+  persistDrafts();
+  emitDrafts();
+}
+
+export function clearPoolDraft(chainId: number | undefined, pair: string | undefined) {
+  const key = depositDraftKey(chainId, pair);
+  if (!key) return;
+  hydratePoolDrafts();
+  drafts.delete(key);
+  draftSnapshots.delete(key);
+  persistDrafts();
+  emitDrafts();
+}
+
+export function resetPoolDrafts() {
+  drafts.clear();
+  draftSnapshots.clear();
+  draftsHydrated = false;
+  emitDrafts();
+}
+
 /** `quoteAdd` returns named fields or a positional tuple. */
 export function pullFromQuote(value: unknown): { nix: bigint; token: bigint } | null {
   if (!value || typeof value !== "object") return null;

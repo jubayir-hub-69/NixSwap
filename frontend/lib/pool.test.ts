@@ -1,6 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { allowanceCovers, depositAction, quoteRemove, ratioOut, withdrawAction } from "./pool.ts";
+import {
+  allowanceCovers,
+  clearPoolDraft,
+  depositAction,
+  displayedAmount,
+  quoteRemove,
+  ratioForEmptySide,
+  ratioOut,
+  readPoolDraft,
+  resetPoolDrafts,
+  savePoolAmounts,
+  savePoolApproval,
+  withdrawAction,
+} from "./pool.ts";
 
 const ONE = 10n ** 18n;
 const total = 447213595499957939281n;
@@ -34,6 +47,34 @@ test("approvals move from NIX to the token to add, and a refetch does not stick 
   assert.equal(allowanceCovers(200n * ONE, false, false, 0n, 200n * ONE), "ok");
   assert.equal(depositAction({ ...base, nix: "ok", token: "ok" }).action, "add");
   assert.equal(allowanceCovers(200n * ONE, true, false, 0n, 200n * ONE), "ok");
+});
+
+test("a filled deposit stays put when reserves move, and a blank side still follows the ratio", () => {
+  const nix = 140n * ONE;
+  const token = (nix * reserveToken) / reserveNix;
+  assert.equal(ratioForEmptySide(nix, token, reserveNix, reserveToken), null);
+  assert.deepEqual(ratioForEmptySide(nix, null, reserveNix, reserveToken), { nix, token });
+  assert.equal(ratioForEmptySide(nix, token, reserveNix + ONE, reserveToken), null);
+});
+
+test("a confirmation refetch keeps the typed deposit and the approval already signed", () => {
+  resetPoolDrafts();
+  const chainId = 421614;
+  const pair = "0x00000000000000000000000000000000000000a1";
+  savePoolAmounts(chainId, pair, "140", "2800");
+  assert.equal(displayedAmount("", readPoolDraft(chainId, pair)?.nix), "140");
+  assert.equal(displayedAmount("", readPoolDraft(chainId, pair)?.token), "2800");
+  assert.equal(displayedAmount("12", "140"), "12");
+  assert.equal(displayedAmount("0", "140"), "0");
+  savePoolApproval(chainId, pair, "0x00000000000000000000000000000000000000b2", 140n * ONE, 0n);
+  savePoolApproval(chainId, pair, "0x00000000000000000000000000000000000000b2", 0n, 2800n * ONE);
+  const saved = readPoolDraft(chainId, pair);
+  assert.equal(saved?.paidNix, 140n * ONE);
+  assert.equal(saved?.paidToken, 2800n * ONE);
+  assert.equal(saved?.nix, "140");
+  clearPoolDraft(chainId, pair);
+  assert.equal(readPoolDraft(chainId, pair), null);
+  assert.equal(displayedAmount("", undefined), "");
 });
 
 test("withdrawing 200 shares is blocked when the wallet holds none, and allowed when the preview pays both assets", () => {

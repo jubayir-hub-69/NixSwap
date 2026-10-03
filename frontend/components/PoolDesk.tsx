@@ -1,7 +1,7 @@
 "use client";
 
 import { useConnectModal } from "@rainbow-me/rainbowkit";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAccount, usePublicClient, useReadContract, useSwitchChain } from "wagmi";
 import { abis } from "@/config/contracts";
@@ -15,17 +15,36 @@ import { errorText, liveReadQuery, preferredChainId } from "@/lib/deployment";
 import { formatPrice, liveReserve, liveSpot, quoteAdd } from "@/lib/markets";
 import {
   allowanceCovers,
+  clearPoolDraft,
   depositAction,
+  displayedAmount,
   maxBalanced,
+  poolDraftSnapshot,
   pullFromQuote,
   quoteRemove,
+  ratioForEmptySide,
   ratioOut,
+  savePoolAmounts,
+  savePoolApproval,
+  subscribePoolDrafts,
   withdrawAction,
 } from "@/lib/pool";
 
+function tokenFromLocation() {
+  if (typeof window === "undefined") return null;
+  return new URLSearchParams(window.location.search).get("token");
+}
+
+function PoolTokenQuery({ onToken }: { onToken: (token: string | null) => void }) {
+  const token = useSearchParams().get("token");
+  useEffect(() => {
+    onToken(token);
+  }, [onToken, token]);
+  return null;
+}
+
 export function PoolDesk() {
-  const params = useSearchParams();
-  const requested = params.get("token");
+  const [requested, setRequested] = useState<string | null>(tokenFromLocation);
   const { address, chainId: walletChainId, isConnected } = useAccount();
   const client = usePublicClient({ chainId: walletChainId });
   const { openConnectModal } = useConnectModal();
@@ -53,9 +72,11 @@ export function PoolDesk() {
   const walletToken = useErc20Balance(active?.token, address, chainId);
   const pairNixBalance = useErc20Balance(deployment?.NixToken, pair, chainId);
   const pairTokenBalance = useErc20Balance(active?.token, pair, chainId);
-  const snappedPair = useRef<string | null>(null);
-  const nixText = useRef("");
-  const tokenText = useRef("");
+  const saved = useSyncExternalStore(
+    subscribePoolDrafts,
+    () => poolDraftSnapshot(chainId, pair),
+    () => null,
+  );
 
   const reserveNix = useReadContract({
     address: pair,
@@ -112,12 +133,25 @@ export function PoolDesk() {
 
   const nixDecimals = walletNix.decimals;
   const tokenDecimals = walletToken.decimals;
-  const nixRaw = parseUnits(nixAmount, nixDecimals);
-  const tokenRaw = parseUnits(tokenAmount, tokenDecimals);
+  const nixField = displayedAmount(nixAmount, saved?.nix);
+  const tokenField = displayedAmount(tokenAmount, saved?.token);
   const storedNix = asBigint(reserveNix.data);
   const storedToken = asBigint(reserveToken.data);
+  const oneSideBlank = (nixField === "") !== (tokenField === "");
+  const balanced = oneSideBlank
+    ? ratioForEmptySide(
+        nixField === "" ? null : parseUnits(nixField, nixDecimals),
+        tokenField === "" ? null : parseUnits(tokenField, tokenDecimals),
+        storedNix,
+        storedToken,
+      )
+    : null;
+  const nixShown = nixField !== "" ? nixField : balanced ? plainUnits(balanced.nix, nixDecimals) : "";
+  const tokenShown = tokenField !== "" ? tokenField : balanced ? plainUnits(balanced.token, tokenDecimals) : "";
+  const nixRaw = balanced?.nix ?? parseUnits(nixShown, nixDecimals);
+  const tokenRaw = balanced?.token ?? parseUnits(tokenShown, tokenDecimals);
   const supply = asBigint(totalLiquidity.data);
-  const reservesReady = reserveNix.isSuccess && reserveToken.isSuccess && totalLiquidity.isSuccess;
+  const reservesReady = storedNix !== undefined && storedToken !== undefined && supply !== undefined;
   const hasRatio = Boolean(storedNix && storedToken && storedNix > 0n && storedToken > 0n);
   const quoted =
     reservesReady && nixRaw && tokenRaw && storedNix !== undefined && storedToken !== undefined && supply !== undefined
@@ -125,7 +159,11 @@ export function PoolDesk() {
       : null;
   const nixAllowed = asBigint(nixAllowance.data);
   const tokenAllowed = asBigint(tokenAllowance.data);
-  const grant = paid && pair && address && paid.pair === pair && paid.account === address ? paid : null;
+  const savedGrant =
+    saved && address && pair && saved.account === address.toLowerCase()
+      ? { pair, account: address, nix: saved.paidNix, token: saved.paidToken }
+      : null;
+  const grant = paid && pair && address && paid.pair === pair && paid.account === address ? paid : savedGrant;
   const optimisticNix = grant ? grant.nix : 0n;
   const optimisticToken = grant ? grant.token : 0n;
   const nixPending = Boolean(deployment && address && pair && nixAllowed === undefined && !nixAllowance.isError);
@@ -194,26 +232,6 @@ export function PoolDesk() {
       : owned.toString();
   const busy = tx.pending || switching || action !== null;
 
-  useEffect(() => {
-    nixText.current = nixAmount;
-    tokenText.current = tokenAmount;
-  }, [nixAmount, tokenAmount]);
-
-  useEffect(() => {
-    if (!pair || !storedNix || !storedToken || storedNix === 0n || storedToken === 0n) return;
-    if (snappedPair.current === pair) return;
-    snappedPair.current = pair;
-    const nix = parseUnits(nixText.current, nixDecimals);
-    const token = parseUnits(tokenText.current, tokenDecimals);
-    if (nix && nix > 0n) {
-      const other = ratioOut(nix, storedNix, storedToken);
-      if (other) setTokenAmount(plainUnits(other, tokenDecimals));
-    } else if (token && token > 0n) {
-      const other = ratioOut(token, storedToken, storedNix);
-      if (other) setNixAmount(plainUnits(other, nixDecimals));
-    }
-  }, [nixDecimals, pair, storedNix, storedToken, tokenDecimals]);
-
   const refetchNixAllowance = nixAllowance.refetch;
   const refetchTokenAllowance = tokenAllowance.refetch;
   const refetchPosition = position.refetch;
@@ -247,8 +265,15 @@ export function PoolDesk() {
     tx.fail(errorText(error));
   }
 
+  function publish(nix: string, token: string) {
+    savePoolAmounts(chainId, pair, nix, token);
+    setNixAmount(nix);
+    setTokenAmount(token);
+  }
+
   function remember(nix: bigint, token: bigint) {
     if (!pair || !address) return;
+    savePoolApproval(chainId, pair, address, nix, token);
     setPaid((current) => {
       const base = current && current.pair === pair && current.account === address ? current : { pair, account: address, nix: 0n, token: 0n };
       return {
@@ -276,43 +301,55 @@ export function PoolDesk() {
   function changeNix(value: string) {
     const next = decimalInput(value);
     if (next === null) return;
-    setNixAmount(next);
-    if (!hasRatio || storedNix === undefined || storedToken === undefined) return;
+    if (!hasRatio || storedNix === undefined || storedToken === undefined) {
+      publish(next, tokenField);
+      return;
+    }
     const raw = parseUnits(next, nixDecimals);
-    if (raw === null) return;
+    if (raw === null) {
+      publish(next, tokenField);
+      return;
+    }
     if (raw === 0n) {
-      setTokenAmount("");
+      publish(next, "");
       return;
     }
     const other = ratioOut(raw, storedNix, storedToken);
-    setTokenAmount(other ? plainUnits(other, tokenDecimals) : "");
+    publish(next, other ? plainUnits(other, tokenDecimals) : "");
   }
 
   function changeToken(value: string) {
     const next = decimalInput(value);
     if (next === null) return;
-    setTokenAmount(next);
-    if (!hasRatio || storedNix === undefined || storedToken === undefined) return;
+    if (!hasRatio || storedNix === undefined || storedToken === undefined) {
+      publish(nixField, next);
+      return;
+    }
     const raw = parseUnits(next, tokenDecimals);
-    if (raw === null) return;
+    if (raw === null) {
+      publish(nixField, next);
+      return;
+    }
     if (raw === 0n) {
-      setNixAmount("");
+      publish("", next);
       return;
     }
     const other = ratioOut(raw, storedToken, storedNix);
-    setNixAmount(other ? plainUnits(other, nixDecimals) : "");
+    publish(other ? plainUnits(other, nixDecimals) : "", next);
   }
 
   function fillMax() {
     if (walletNix.value === undefined || walletToken.value === undefined) return;
     const max = maxBalanced(walletNix.value, walletToken.value, storedNix ?? 0n, storedToken ?? 0n);
     if (!max) return;
-    setNixAmount(plainUnits(max.nix, nixDecimals));
-    setTokenAmount(plainUnits(max.token, tokenDecimals));
+    publish(plainUnits(max.nix, nixDecimals), plainUnits(max.token, tokenDecimals));
   }
 
   async function approve(which: "nix" | "token") {
     if (!pair || !walletChainId || !deployment || !active || !client || walletChainId !== chainId) return;
+    const keptNix = nixShown;
+    const keptToken = tokenShown;
+    savePoolAmounts(chainId, pair, keptNix, keptToken);
     tx.clear();
     setAction("deposit");
     setChecking(true);
@@ -334,6 +371,8 @@ export function PoolDesk() {
       );
       remember(which === "nix" ? amount : 0n, which === "token" ? amount : 0n);
       await refresh();
+      setNixAmount((current) => current || keptNix);
+      setTokenAmount((current) => current || keptToken);
     } catch (error) {
       fail(error);
     } finally {
@@ -367,7 +406,7 @@ export function PoolDesk() {
         throw new Error("Allowances unavailable.");
       }
       if (nixAllow < fresh.nix || tokenAllow < fresh.token) {
-        setPaid({ pair, account: address, nix: nixAllow, token: tokenAllow });
+        remember(nixAllow, tokenAllow);
         throw new Error("Approve both tokens for the current pool ratio, then add liquidity.");
       }
       await client.simulateContract({
@@ -387,8 +426,10 @@ export function PoolDesk() {
           chainId: walletChainId,
         }),
       );
+      clearPoolDraft(chainId, pair);
       setNixAmount("");
       setTokenAmount("");
+      setPaid(null);
       await refresh();
     } catch (error) {
       fail(error);
@@ -445,7 +486,7 @@ export function PoolDesk() {
     depositHint = `The pool will pull ${formatUnits(quoted.nix, nixDecimals)} NIX and ${formatUnits(quoted.token, tokenDecimals)} ${active.symbol}.`;
     if (depositStep.action === "approve-nix") depositHint += " Approve NIX, then approve the token.";
     else if (depositStep.action === "approve-token") depositHint += " NIX is approved. Approve the token next.";
-    else if (depositStep.action === "add") depositHint += " Both approvals cover this depositStep.";
+    else if (depositStep.action === "add") depositHint += " Both approvals cover this deposit.";
     else if (shortNix) depositHint += ` This wallet holds ${formatUnits(walletNix.value ?? 0n, nixDecimals)} NIX.`;
     else if (shortToken) {
       depositHint += ` This wallet holds ${formatUnits(walletToken.value ?? 0n, tokenDecimals)} ${active.symbol}.`;
@@ -454,6 +495,9 @@ export function PoolDesk() {
 
   return (
     <main className="mx-auto flex w-full max-w-xl flex-1 flex-col gap-4 px-4 py-10 sm:py-14">
+      <Suspense fallback={null}>
+        <PoolTokenQuery onToken={setRequested} />
+      </Suspense>
       <section className="glass-panel rounded-[28px] p-5">
         <h1 className="text-lg font-semibold tracking-tight">Pool</h1>
         <p className="mt-1 text-xs text-mist">
@@ -511,6 +555,7 @@ export function PoolDesk() {
         <section className="glass-panel rounded-[28px] p-5">
           <form
             className="space-y-3"
+            onReset={(event) => event.preventDefault()}
             onSubmit={(event) => {
               event.preventDefault();
               if (busy) return;
@@ -541,7 +586,7 @@ export function PoolDesk() {
               </span>
               <input
                 data-testid="deposit-nix"
-                value={nixAmount}
+                value={nixShown}
                 inputMode="decimal"
                 placeholder="0"
                 aria-label="NIX amount"
@@ -564,7 +609,7 @@ export function PoolDesk() {
               </span>
               <input
                 data-testid="deposit-token"
-                value={tokenAmount}
+                value={tokenShown}
                 inputMode="decimal"
                 placeholder="0"
                 aria-label="Token amount"
@@ -580,8 +625,20 @@ export function PoolDesk() {
             ) : null}
             {depositHint ? <p className="text-xs text-mist">{depositHint}</p> : null}
             <button
-              type="submit"
+              type="button"
               data-testid="deposit-action"
+              onClick={() => {
+                if (busy) return;
+                if (
+                  depositStep.action === "connect" ||
+                  depositStep.action === "switch" ||
+                  depositStep.action === "approve-nix" ||
+                  depositStep.action === "approve-token" ||
+                  depositStep.action === "add"
+                ) {
+                  go(depositStep.action);
+                }
+              }}
               aria-busy={action === "deposit"}
               disabled={busy || depositStep.action === "wait"}
               className="btn-primary min-h-12 w-full rounded-2xl px-4 py-3 text-sm font-semibold"
