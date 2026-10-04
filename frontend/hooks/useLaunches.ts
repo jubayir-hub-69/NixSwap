@@ -4,6 +4,7 @@ import { useMemo, useSyncExternalStore } from "react";
 import { useAccount, useChainId, useReadContract, useReadContracts, useWatchContractEvent } from "wagmi";
 import { abis } from "@/config/contracts";
 import { deploymentFor, liveReadQuery, optionalAddress, readChainId } from "@/lib/deployment";
+import { useTokenLogos } from "@/hooks/useTokenLogos";
 import { parseActiveLaunch, parseLaunch, parseLaunches, type LaunchRow } from "@/lib/markets";
 
 function subscribeHydration() {
@@ -68,6 +69,12 @@ export function useLaunches() {
     return rows;
   }, [infoQuery.data]);
   const rows = allRows.length > 0 ? allRows : infoRows;
+  const logoTokens = useMemo(() => rows.map((row) => row.token), [rows]);
+  const logoBook = useTokenLogos(launchpad, logoTokens, chainId);
+  const listed = useMemo(
+    () => rows.map((row) => ({ ...row, logoURI: logoBook.logos.get(row.token.toLowerCase()) ?? row.logoURI ?? "" })),
+    [logoBook.logos, rows],
+  );
 
   const activeQuery = useReadContract({
     address: launchpad,
@@ -117,13 +124,19 @@ export function useLaunches() {
     launchpad,
     chainId,
     address: account.address,
-    rows,
+    rows: listed,
     count,
     loading,
     error,
     active: parseActiveLaunch(activeQuery.data),
     async refetch() {
-      await Promise.all([countQuery.refetch(), allQuery.refetch(), infoQuery.refetch(), activeQuery.refetch()]);
+      await Promise.all([
+        countQuery.refetch(),
+        allQuery.refetch(),
+        infoQuery.refetch(),
+        activeQuery.refetch(),
+        logoBook.refetch(),
+      ]);
     },
   };
 }

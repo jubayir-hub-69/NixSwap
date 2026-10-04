@@ -3236,6 +3236,11 @@ export const abis = {
     },
     {
       "inputs": [],
+      "name": "InvalidLogo",
+      "type": "error"
+    },
+    {
+      "inputs": [],
       "name": "InvalidName",
       "type": "error"
     },
@@ -3685,6 +3690,25 @@ export const abis = {
       "inputs": [
         {
           "indexed": true,
+          "internalType": "address",
+          "name": "token",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "logoURI",
+          "type": "string"
+        }
+      ],
+      "name": "TokenLogo",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
           "internalType": "uint256",
           "name": "id",
           "type": "uint256"
@@ -3741,6 +3765,19 @@ export const abis = {
     {
       "inputs": [],
       "name": "LIQUIDITY_BPS",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "MAX_LOGO_URI",
       "outputs": [
         {
           "internalType": "uint256",
@@ -3913,6 +3950,50 @@ export const abis = {
         }
       ],
       "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "name_",
+          "type": "string"
+        },
+        {
+          "internalType": "string",
+          "name": "symbol_",
+          "type": "string"
+        },
+        {
+          "internalType": "uint256",
+          "name": "supply",
+          "type": "uint256"
+        },
+        {
+          "internalType": "string",
+          "name": "logoURI_",
+          "type": "string"
+        }
+      ],
+      "name": "createToken",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "id",
+          "type": "uint256"
+        },
+        {
+          "internalType": "address",
+          "name": "token",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "pair",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "nonpayable",
       "type": "function"
     },
     {
@@ -4579,6 +4660,25 @@ export const abis = {
           "internalType": "struct NixLaunchpad.TokenLaunch",
           "name": "",
           "type": "tuple"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "token",
+          "type": "address"
+        }
+      ],
+      "name": "tokenLogo",
+      "outputs": [
+        {
+          "internalType": "string",
+          "name": "logoURI",
+          "type": "string"
         }
       ],
       "stateMutability": "view",
@@ -7854,9 +7954,9 @@ export const deployments = {
     "IntentRegistry": "0x444CC59294421CAf78cc40fb92691b3657F0cAE6",
     "NixPool": "0xDd2BfD7A8D5E29dCcBc37f69F520A74Bd9d461b1",
     "NixLaunch": "0xb0575745DDd4c43D70F9d8a890aF52bE047b408b",
-    "NixLaunchpad": "0x540a746AD6b3C87666b2B1Bcd6Cc0ee5ce235d43",
+    "NixLaunchpad": "0x429D2C11Ab642e24f00153b4b551E04375caE171",
     "NixBridge": "0x98e4cA0060D15dddE86e123E2e8Dc7ba35A46333",
-    "LaunchFactory": "0xaCdbE5De1AFc601a01B9026233B57702150E38b8"
+    "LaunchFactory": "0x2ede51F104a89c6d2E71F958b605fca7eaEE0955"
   },
   "421614": {
     "chainId": 421614,
@@ -7866,9 +7966,9 @@ export const deployments = {
     "IntentRegistry": "0x838491A2108457b7F895C70548061776F97995D7",
     "NixPool": "0x1826f4165e8Bc2363aeaDfA022be927266b36b1c",
     "NixLaunch": "0x9e39A7e03a34B363debcd12F3472BD3e9eb82336",
-    "NixLaunchpad": "0x86798f4777A48a3aA6cd2B1bee0E5BF7C85806eb",
+    "NixLaunchpad": "0x0cc49e80e95AE8e039b206366d40C4C9d1C47cBF",
     "NixBridge": "0x6B34A7ADf191a058FaaC8377716657B5d849AA95",
-    "LaunchFactory": "0x429D2C11Ab642e24f00153b4b551E04375caE171"
+    "LaunchFactory": "0xeaa4421B37ddEC21a02c2D095E6AA6993463903e"
   },
   "11155111": {
     "chainId": 11155111,
@@ -7878,8 +7978,8 @@ export const deployments = {
     "IntentRegistry": "0xBbc7C81C07C9E75960aDAb5F6Ee94e639C24832b",
     "NixPool": "0x1A85147a0b372A56A2C93515E44d99d062264c54",
     "NixLaunch": "0xfE128bCc8F4D45AB9E24bF446EEa8302d1FD4CB7",
-    "NixLaunchpad": "0x2De65f74667E8B38B331302f4e341834c769DCfa",
+    "NixLaunchpad": "0x8f97B10ca592cB0c9d2F4Cc9c01f03eC826c4744",
     "NixBridge": "0x1F484EbdbCB1C6e6320ab73F7A579ceb79eF6eE2",
-    "LaunchFactory": "0x540a746AD6b3C87666b2B1Bcd6Cc0ee5ce235d43"
+    "LaunchFactory": "0xBf20dc5054b51bf99eaFc54190C9362dfAB478d5"
   }
 } as const;

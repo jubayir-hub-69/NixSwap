@@ -59,3 +59,18 @@ export function formatUnits(value: bigint, decimals: number, maxFraction = 6): s
     .replace(/0+$/, "");
   return fractionText ? `${wholeText}.${fractionText}` : wholeText;
 }
+
+/**
+ * Portfolio rows. Truncate (do not round) to 4 decimal places, keep 2 when a
+ * fraction remains, and group the whole part. 799.100000000000000002 → 799.10.
+ */
+export function formatPortfolioBalance(value: bigint, decimals: number): string {
+  const text = formatUnits(value, decimals, 4);
+  const sign = text.startsWith("-") ? "-" : "";
+  const body = sign ? text.slice(1) : text;
+  const dot = body.indexOf(".");
+  if (dot === -1) return text;
+  const fraction = body.slice(dot + 1);
+  const shown = fraction.length >= 2 ? fraction : fraction.padEnd(2, "0");
+  return `${sign}${body.slice(0, dot)}.${shown}`;
+}

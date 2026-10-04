@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { AddToWalletButton } from "@/components/AddToWalletButton";
+import { TokenMark } from "@/components/TokenMark";
 import { useChainHoldings } from "@/hooks/useChainHoldings";
 import { useLaunches } from "@/hooks/useLaunches";
 import { useMarketQuotes } from "@/hooks/useMarketQuotes";
@@ -34,9 +35,12 @@ function StatCard({ title, rows }: { title: string; rows: Quote[] }) {
             href={`/pool?token=${row.token}`}
             className="flex items-center justify-between gap-3 rounded-2xl px-2 py-2 hover:bg-white/5"
           >
-            <span>
-              <span className="block text-sm text-frost">{row.symbol}</span>
-              <span className="block text-[11px] text-mist">{priceLabel(row)}</span>
+            <span className="flex min-w-0 items-center gap-2">
+              <TokenMark symbol={row.symbol} logoURI={row.logoURI} size="sm" />
+              <span>
+                <span className="block text-sm text-frost">{row.symbol}</span>
+                <span className="block text-[11px] text-mist">{priceLabel(row)}</span>
+              </span>
             </span>
             <span className={row.ready && row.change !== null && row.change > 0 ? "text-emerald-300" : row.ready && row.change !== null && row.change < 0 ? "text-rose-300" : "text-mist"}>
               {row.ready && row.change !== null ? formatChange(row.change) : "—"}
@@ -155,15 +159,20 @@ export function MarketsBoard() {
                   return (
                     <TableRow key={row.token}>
                       <TableCell>
-                        <Link href={`/swap?token=${row.token}`} className="text-frost hover:text-cyan-glow">
-                          {row.symbol}
-                        </Link>
-                        <span className="mt-0.5 block text-[11px] text-mist">
-                          {row.name} · {shortAddress(row.token)} · <Link href={`/pool?token=${row.token}`} className="text-cyan-glow">Pool</Link>
-                        </span>
-                        {launches.chainId ? (
-                          <AddToWalletButton token={row.token} chainId={launches.chainId} className="mt-1 text-[11px] text-cyan-glow disabled:opacity-40" />
-                        ) : null}
+                        <div className="flex items-start gap-2">
+                          <TokenMark symbol={row.symbol} logoURI={row.logoURI} size="sm" />
+                          <div className="min-w-0">
+                            <Link href={`/swap?token=${row.token}`} className="text-frost hover:text-cyan-glow">
+                              {row.symbol}
+                            </Link>
+                            <span className="mt-0.5 block text-[11px] text-mist">
+                              {row.name} · {shortAddress(row.token)} · <Link href={`/pool?token=${row.token}`} className="text-cyan-glow">Pool</Link>
+                            </span>
+                            {launches.chainId ? (
+                              <AddToWalletButton token={row.token} chainId={launches.chainId} className="mt-1 text-[11px] text-cyan-glow disabled:opacity-40" />
+                            ) : null}
+                          </div>
+                        </div>
                       </TableCell>
                       <TableCell className="text-frost">{priceLabel(row)}</TableCell>
                       <TableCell className={up ? "text-emerald-300" : down ? "text-rose-300" : "text-mist"}>

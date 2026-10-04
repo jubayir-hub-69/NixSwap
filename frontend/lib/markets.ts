@@ -10,6 +10,8 @@ export type LaunchRow = {
   supply: bigint;
   createdAt: bigint;
   active: boolean;
+  /** On-chain logo link. Empty when this launch has none, or when the read is still loading. */
+  logoURI?: string;
 };
 
 function asAddress(value: unknown): `0x${string}` | undefined {

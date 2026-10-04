@@ -5,6 +5,7 @@ import {
   clearPoolDraft,
   depositAction,
   displayedAmount,
+  isSpuriousAmountClear,
   quoteRemove,
   ratioForEmptySide,
   ratioOut,
@@ -65,7 +66,12 @@ test("a confirmation refetch keeps the typed deposit and the approval already si
   assert.equal(displayedAmount("", readPoolDraft(chainId, pair)?.nix), "140");
   assert.equal(displayedAmount("", readPoolDraft(chainId, pair)?.token), "2800");
   assert.equal(displayedAmount("12", "140"), "12");
-  assert.equal(displayedAmount("0", "140"), "0");
+  assert.equal(displayedAmount("0", "140"), "140");
+  assert.equal(displayedAmount("0.5", "140"), "0.5");
+  savePoolAmounts(chainId, pair, "", "");
+  savePoolAmounts(chainId, pair, "0", "0");
+  assert.equal(readPoolDraft(chainId, pair)?.nix, "140");
+  assert.equal(readPoolDraft(chainId, pair)?.token, "2800");
   savePoolApproval(chainId, pair, "0x00000000000000000000000000000000000000b2", 140n * ONE, 0n);
   savePoolApproval(chainId, pair, "0x00000000000000000000000000000000000000b2", 0n, 2800n * ONE);
   const saved = readPoolDraft(chainId, pair);
@@ -75,6 +81,27 @@ test("a confirmation refetch keeps the typed deposit and the approval already si
   clearPoolDraft(chainId, pair);
   assert.equal(readPoolDraft(chainId, pair), null);
   assert.equal(displayedAmount("", undefined), "");
+});
+
+test("a wallet restore cannot blank a typed deposit, and a real edit still replaces it", () => {
+  resetPoolDrafts();
+  const chainId = 421614;
+  const pair = "0x00000000000000000000000000000000000000a1";
+  savePoolAmounts(chainId, pair, "100", "20000");
+  assert.equal(isSpuriousAmountClear("", "100", null), true);
+  assert.equal(isSpuriousAmountClear("0", "100", "insertText"), true);
+  assert.equal(isSpuriousAmountClear("", "100", "deleteContentBackward"), false);
+  assert.equal(isSpuriousAmountClear("50", "100", null), false);
+  savePoolAmounts(chainId, pair, "", "");
+  savePoolAmounts(chainId, pair, "0", "0");
+  assert.equal(readPoolDraft(chainId, pair)?.nix, "100");
+  assert.equal(readPoolDraft(chainId, pair)?.token, "20000");
+  assert.equal(displayedAmount("0", readPoolDraft(chainId, pair)?.nix), "100");
+  savePoolAmounts(chainId, pair, "50", "10000");
+  assert.equal(readPoolDraft(chainId, pair)?.nix, "50");
+  assert.equal(readPoolDraft(chainId, pair)?.token, "10000");
+  savePoolAmounts(chainId, pair, "", "", true);
+  assert.equal(readPoolDraft(chainId, pair), null);
 });
 
 test("withdrawing 200 shares is blocked when the wallet holds none, and allowed when the preview pays both assets", () => {

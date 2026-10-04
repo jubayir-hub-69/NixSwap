@@ -1,7 +1,7 @@
 "use client";
 
 import { useConnectModal } from "@rainbow-me/rainbowkit";
-import { Suspense, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAccount, usePublicClient, useReadContract, useSwitchChain } from "wagmi";
 import { abis } from "@/config/contracts";
@@ -18,12 +18,14 @@ import {
   clearPoolDraft,
   depositAction,
   displayedAmount,
+  isBlankAmount,
   maxBalanced,
   poolDraftSnapshot,
   pullFromQuote,
   quoteRemove,
   ratioForEmptySide,
   ratioOut,
+  readPoolDraft,
   savePoolAmounts,
   savePoolApproval,
   subscribePoolDrafts,
@@ -62,6 +64,8 @@ export function PoolDesk() {
   const pair = active?.pair;
   const [nixAmount, setNixAmount] = useState("");
   const [tokenAmount, setTokenAmount] = useState("");
+  const nixInput = useRef<HTMLInputElement>(null);
+  const tokenInput = useRef<HTMLInputElement>(null);
   const [shares, setShares] = useState("");
   const [action, setAction] = useState<"deposit" | "withdraw" | null>(null);
   const [checking, setChecking] = useState(false);
@@ -235,6 +239,29 @@ export function PoolDesk() {
   const refetchNixAllowance = nixAllowance.refetch;
   const refetchTokenAllowance = tokenAllowance.refetch;
   const refetchPosition = position.refetch;
+  const restoreDepositFields = useCallback(() => {
+    const draft = readPoolDraft(chainId, pair);
+    if (!draft || isBlankAmount(draft.nix) || isBlankAmount(draft.token)) return;
+    const nixNode = nixInput.current;
+    const tokenNode = tokenInput.current;
+    if (!nixNode || !tokenNode) return;
+    if (!isBlankAmount(nixNode.value) && !isBlankAmount(tokenNode.value)) return;
+    setNixAmount(draft.nix);
+    setTokenAmount(draft.token);
+    nixNode.value = draft.nix;
+    tokenNode.value = draft.token;
+  }, [chainId, pair]);
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState === "visible") restoreDepositFields();
+    }
+    window.addEventListener("focus", restoreDepositFields);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", restoreDepositFields);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [restoreDepositFields]);
   useEffect(() => {
     if (!nixPending && !tokenPending && !sharesPending) return;
     const timer = setInterval(() => {
@@ -265,8 +292,31 @@ export function PoolDesk() {
     tx.fail(errorText(error));
   }
 
-  function publish(nix: string, token: string) {
+  function keptSide(shown: string, stored: string | undefined) {
+    if (!isBlankAmount(shown)) return shown;
+    if (!isBlankAmount(stored)) return stored ?? "";
+    return "";
+  }
+
+  function holdDeposit(event: React.ChangeEvent<HTMLInputElement>, field: "nix" | "token") {
+    const nix = keptSide(nixShown, saved?.nix);
+    const token = keptSide(tokenShown, saved?.token);
+    const keep = field === "nix" ? nix : token;
+    if (keep) event.currentTarget.value = keep;
+    if (isBlankAmount(nix) || isBlankAmount(token)) return;
     savePoolAmounts(chainId, pair, nix, token);
+    setNixAmount(nix);
+    setTokenAmount(token);
+  }
+
+  function publish(nix: string, token: string, allowBlank = false) {
+    savePoolAmounts(chainId, pair, nix, token, allowBlank);
+    const stored = readPoolDraft(chainId, pair);
+    if (stored && !allowBlank) {
+      setNixAmount(stored.nix);
+      setTokenAmount(stored.token);
+      return;
+    }
     setNixAmount(nix);
     setTokenAmount(token);
   }
@@ -298,9 +348,17 @@ export function PoolDesk() {
     return pull;
   }
 
-  function changeNix(value: string) {
+  function changeNix(value: string, event: React.ChangeEvent<HTMLInputElement>) {
     const next = decimalInput(value);
     if (next === null) return;
+    if (isBlankAmount(next)) {
+      if (!isBlankAmount(nixShown) || !isBlankAmount(tokenShown)) {
+        holdDeposit(event, "nix");
+        return;
+      }
+      publish("", "", true);
+      return;
+    }
     if (!hasRatio || storedNix === undefined || storedToken === undefined) {
       publish(next, tokenField);
       return;
@@ -310,17 +368,21 @@ export function PoolDesk() {
       publish(next, tokenField);
       return;
     }
-    if (raw === 0n) {
-      publish(next, "");
-      return;
-    }
     const other = ratioOut(raw, storedNix, storedToken);
-    publish(next, other ? plainUnits(other, tokenDecimals) : "");
+    publish(next, other ? plainUnits(other, tokenDecimals) : "", !other);
   }
 
-  function changeToken(value: string) {
+  function changeToken(value: string, event: React.ChangeEvent<HTMLInputElement>) {
     const next = decimalInput(value);
     if (next === null) return;
+    if (isBlankAmount(next)) {
+      if (!isBlankAmount(nixShown) || !isBlankAmount(tokenShown)) {
+        holdDeposit(event, "token");
+        return;
+      }
+      publish("", "", true);
+      return;
+    }
     if (!hasRatio || storedNix === undefined || storedToken === undefined) {
       publish(nixField, next);
       return;
@@ -330,12 +392,8 @@ export function PoolDesk() {
       publish(nixField, next);
       return;
     }
-    if (raw === 0n) {
-      publish("", next);
-      return;
-    }
     const other = ratioOut(raw, storedToken, storedNix);
-    publish(other ? plainUnits(other, nixDecimals) : "", next);
+    publish(other ? plainUnits(other, nixDecimals) : "", next, !other);
   }
 
   function fillMax() {
@@ -371,8 +429,17 @@ export function PoolDesk() {
       );
       remember(which === "nix" ? amount : 0n, which === "token" ? amount : 0n);
       await refresh();
-      setNixAmount((current) => current || keptNix);
-      setTokenAmount((current) => current || keptToken);
+      savePoolAmounts(chainId, pair, keptNix, keptToken);
+      setNixAmount((current) => (isBlankAmount(current) ? keptNix : current));
+      setTokenAmount((current) => (isBlankAmount(current) ? keptToken : current));
+      restoreDepositFields();
+      requestAnimationFrame(() => {
+        const draft = readPoolDraft(chainId, pair);
+        if (!draft || isBlankAmount(draft.nix) || isBlankAmount(draft.token)) {
+          savePoolAmounts(chainId, pair, keptNix, keptToken);
+        }
+        restoreDepositFields();
+      });
     } catch (error) {
       fail(error);
     } finally {
@@ -430,6 +497,8 @@ export function PoolDesk() {
       setNixAmount("");
       setTokenAmount("");
       setPaid(null);
+      if (nixInput.current) nixInput.current.value = "";
+      if (tokenInput.current) tokenInput.current.value = "";
       await refresh();
     } catch (error) {
       fail(error);
@@ -553,10 +622,10 @@ export function PoolDesk() {
 
       {active && pair && deployment ? (
         <section className="glass-panel rounded-[28px] p-5">
-          <form
+          <div
             className="space-y-3"
-            onReset={(event) => event.preventDefault()}
-            onSubmit={(event) => {
+            onKeyDown={(event) => {
+              if (event.key !== "Enter") return;
               event.preventDefault();
               if (busy) return;
               if (
@@ -585,12 +654,14 @@ export function PoolDesk() {
                 </span>
               </span>
               <input
+                ref={nixInput}
                 data-testid="deposit-nix"
                 value={nixShown}
                 inputMode="decimal"
+                autoComplete="off"
                 placeholder="0"
                 aria-label="NIX amount"
-                onChange={(event) => changeNix(event.target.value)}
+                onChange={(event) => changeNix(event.target.value, event)}
                 className="w-full bg-transparent text-3xl text-frost outline-none placeholder:text-white/20"
               />
             </label>
@@ -608,12 +679,14 @@ export function PoolDesk() {
                 </span>
               </span>
               <input
+                ref={tokenInput}
                 data-testid="deposit-token"
                 value={tokenShown}
                 inputMode="decimal"
+                autoComplete="off"
                 placeholder="0"
                 aria-label="Token amount"
-                onChange={(event) => changeToken(event.target.value)}
+                onChange={(event) => changeToken(event.target.value, event)}
                 className="w-full bg-transparent text-3xl text-frost outline-none placeholder:text-white/20"
               />
             </label>
@@ -649,7 +722,7 @@ export function PoolDesk() {
                 idle={depositStep.label}
               />
             </button>
-          </form>
+          </div>
 
           <form
             className="mt-6 space-y-3"

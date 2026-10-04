@@ -207,8 +207,34 @@ export function depositDraftKey(chainId: number | undefined, pair: string | unde
   return `${chainId}:${pair.toLowerCase()}`;
 }
 
-/** A wiped field falls back to the draft. A newer typed value wins, including "0". */
+/** Empty, or an all-zero amount such as "0" or "0.00". "0.5" is a real amount. */
+export function isBlankAmount(value: string | undefined) {
+  if (value === undefined) return true;
+  const trimmed = value.trim();
+  return trimmed === "" || /^0+(?:\.0+)?$/.test(trimmed);
+}
+
+/**
+ * Wallet popups restore the form and emit a blank or zero value with no delete inputType.
+ * A real backspace or cut is the only way to clear a deposit the user already typed.
+ */
+export function isSpuriousAmountClear(next: string, currentShown: string, inputType: string | null) {
+  if (!isBlankAmount(next) || isBlankAmount(currentShown)) return false;
+  return (
+    inputType !== "deleteContentBackward" &&
+    inputType !== "deleteContentForward" &&
+    inputType !== "deleteByCut" &&
+    inputType !== "deleteContent" &&
+    inputType !== "deleteByDrag"
+  );
+}
+
+/**
+ * A typed non-zero amount wins so the user can edit.
+ * A blank or zero React value does not hide a deposit already saved for this pair.
+ */
 export function displayedAmount(typed: string, saved: string | undefined) {
+  if (!isBlankAmount(saved) && isBlankAmount(typed)) return saved ?? "";
   return typed !== "" ? typed : saved ?? "";
 }
 
@@ -279,19 +305,29 @@ export function readPoolDraft(chainId: number | undefined, pair: string | undefi
   return asDraft(value);
 }
 
-export function savePoolAmounts(chainId: number | undefined, pair: string | undefined, nix: string, token: string) {
+export function savePoolAmounts(
+  chainId: number | undefined,
+  pair: string | undefined,
+  nix: string,
+  token: string,
+  allowBlank = false,
+) {
   const key = depositDraftKey(chainId, pair);
   if (!key) return;
   hydratePoolDrafts();
   const prev = drafts.get(key) ?? emptyDraft();
-  if (!nix && !token && units(prev.paidNix) === 0n && units(prev.paidToken) === 0n) {
+  // A confirmation refetch must not replace a typed deposit with "" or "0".
+  // Only an explicit clear, or clearPoolDraft after addLiquidity, may blank it.
+  const nixKept = !allowBlank && isBlankAmount(nix) && !isBlankAmount(prev.nix) ? prev.nix : nix;
+  const tokenKept = !allowBlank && isBlankAmount(token) && !isBlankAmount(prev.token) ? prev.token : token;
+  if (isBlankAmount(nixKept) && isBlankAmount(tokenKept) && units(prev.paidNix) === 0n && units(prev.paidToken) === 0n) {
     drafts.delete(key);
     draftSnapshots.delete(key);
     persistDrafts();
     emitDrafts();
     return;
   }
-  drafts.set(key, { ...prev, nix, token, savedAt: Date.now() });
+  drafts.set(key, { ...prev, nix: nixKept, token: tokenKept, savedAt: Date.now() });
   persistDrafts();
   emitDrafts();
 }

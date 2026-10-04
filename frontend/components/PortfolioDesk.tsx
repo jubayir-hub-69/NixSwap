@@ -7,6 +7,7 @@ import { useState } from "react";
 import { erc20Abi } from "viem";
 import { useAccount, useSwitchChain } from "wagmi";
 import { AddToWalletButton } from "@/components/AddToWalletButton";
+import { TokenMark } from "@/components/TokenMark";
 import { HistoryDesk } from "@/components/HistoryDesk";
 import { PricedSummary } from "@/components/PricedSummary";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -16,7 +17,7 @@ import { TxButtonContent } from "@/components/TxButton";
 import { TxNotice } from "@/components/TxNotice";
 import { useChainTx } from "@/hooks/useChainTx";
 import { useChainHoldings, type Holding } from "@/hooks/useChainHoldings";
-import { decimalInput, formatBalance, formatUnits, parseUnits, plainUnits } from "@/lib/amount";
+import { decimalInput, formatBalance, formatPortfolioBalance, formatUnits, parseUnits, plainUnits } from "@/lib/amount";
 import { bridgeChain, parseWalletAddress } from "@/lib/bridge";
 import { errorText, preferredChainId } from "@/lib/deployment";
 import { shortAddress } from "@/lib/markets";
@@ -101,7 +102,10 @@ function SendPanel({
         <span className="mb-1 flex items-baseline justify-between text-xs text-mist">
           <span>Amount</span>
           <span>
-            {formatBalance(true, holding.loading, holding.error || decimals === undefined, holding.balance, decimals ?? 18)} {decimals !== undefined ? symbol : ""}
+            {holding.balance !== undefined && decimals !== undefined
+              ? formatPortfolioBalance(holding.balance, decimals)
+              : formatBalance(true, holding.loading, holding.error || decimals === undefined, holding.balance, decimals ?? 18)}{" "}
+            {decimals !== undefined ? symbol : ""}
           </span>
         </span>
         <span className="flex items-center gap-3">
@@ -222,15 +226,6 @@ const chainTint: Record<number, string> = {
   11155111: "bg-white/10 text-frost",
 };
 
-function TokenMark({ symbol }: { symbol: string }) {
-  const letter = symbol.trim().slice(0, 1).toUpperCase() || "?";
-  return (
-    <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-cyan-glow/10 text-sm font-semibold text-frost">
-      {letter}
-    </span>
-  );
-}
-
 type TokenRow = {
   chainId: number;
   network: string;
@@ -240,11 +235,7 @@ type TokenRow = {
 function exactBalance(holding: Holding) {
   if (holding.error) return "Unavailable";
   if (holding.balance === undefined || holding.decimals === undefined) return holding.loading ? "Reading…" : "Unavailable";
-  const exact = plainUnits(holding.balance, holding.decimals);
-  const dot = exact.indexOf(".");
-  const whole = dot === -1 ? exact : exact.slice(0, dot);
-  const fraction = dot === -1 ? "" : exact.slice(dot);
-  return `${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}${fraction}`;
+  return formatPortfolioBalance(holding.balance, holding.decimals);
 }
 
 function holdsBalance(holding: Holding) {
@@ -307,7 +298,7 @@ function HoldingsList({
             className="flex items-center gap-3 py-3.5"
             data-testid={`holding-${row.chainId}-${row.holding.address}`}
           >
-            <TokenMark symbol={symbol} />
+            <TokenMark symbol={symbol} logoURI={row.holding.logoURI} />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <p className="text-sm font-semibold text-frost">{symbol}</p>

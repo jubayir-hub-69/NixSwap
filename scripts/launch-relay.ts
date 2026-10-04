@@ -18,6 +18,7 @@ const OMNICHAIN_ABI = [
   "function setRemote(uint32 eid, address peer, address remoteEndpoint, address remoteFactory)",
   "function LIQUIDITY_BPS() view returns (uint256)",
   "function remoteOrder(uint32 srcEid, uint256 srcId) view returns (address creator, address sourceToken, address predicted, uint256 supply, uint256 liquidity, bool authorized, bool finalized, string name, string symbol)",
+  "function tokenLogo(address token) view returns (string)",
   "function finalizeRemote(uint32 srcEid, uint256 srcId) returns (address token, address pair)",
   "function executed(bytes32 guid) view returns (bool)",
 ];
@@ -232,10 +233,25 @@ async function retryInbound(runtime: SolverRuntime, pad: Contract) {
       const info = await sourcePad.tokenInfo(id);
       const supply = BigInt(info.supply ?? info[5]);
       const liquidity = (supply * bps) / 10_000n;
-      const message = coder.encode(
-        ["uint256", "string", "string", "uint256", "uint256", "address", "address", "address"],
-        [id, info.name ?? info[3], info.symbol ?? info[4], supply, liquidity, info.token ?? info[0], info.creator ?? info[2], predicted],
-      );
+      const token = info.token ?? info[0];
+      const fields: Array<string | bigint> = [
+        id,
+        info.name ?? info[3],
+        info.symbol ?? info[4],
+        supply,
+        liquidity,
+        token,
+        info.creator ?? info[2],
+        predicted,
+      ];
+      const types = ["uint256", "string", "string", "uint256", "uint256", "address", "address", "address"];
+      try {
+        fields.push(String(await sourcePad.tokenLogo(token)));
+        types.push("string");
+      } catch {
+        // Launchpads deployed before logoURI omit the link from the relay payload.
+      }
+      const message = coder.encode(types, fields);
       const payloadHash = String(await endpoint.inboundPayloadHash(localAddress, source.eid, sender, nonce));
       if (payloadHash === ZeroHash) continue;
       const origin = [source.eid, sender, nonce];

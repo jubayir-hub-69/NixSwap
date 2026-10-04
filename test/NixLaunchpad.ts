@@ -38,6 +38,7 @@ describe("NixLaunchpad", function () {
     expect(listed.map((launch) => launch.symbol)).to.deep.equal(["ALP", "BETA"]);
     expect(listed[0].creator).to.equal(alice.address);
     expect(listed[0].active).to.equal(true);
+    expect(await launchpad.tokenLogo(listed[0].token)).to.equal("");
     expect(listed[1].creator).to.equal(bob.address);
 
     const alpha = await hre.ethers.getContractAt("LaunchToken", listed[0].token);
@@ -204,6 +205,44 @@ describe("NixLaunchpad", function () {
     expect(await nix.balanceOf(alice.address)).to.equal(10_000n * ONE - nixIn + nixOut);
     expect(await pair.reserveToken()).to.equal(liquidityTokens - tokenOut + tokenIn);
     expect(await pair.reserveNix()).to.equal(seed + nixIn - nixOut);
+  });
+
+  it("stores an optional logo on the source token and copies it onto the mirrored token", async function () {
+    const { launchpad, alice, bob, omnichain } = await deploy();
+    const supply = 1_000_000n * ONE;
+    const logo = "https://example.com/alpha.png";
+    const ipfs = "ipfs://bafybeigdyrzt5sfp7kqq";
+    const createWithLogo = (signer: typeof alice) =>
+      launchpad.connect(signer).getFunction("createToken(string,string,uint256,string)");
+    await expect(
+      createWithLogo(alice)("Alpha", "ALP", supply, "http://example.com/a.png")
+    ).to.be.revertedWithCustomError(launchpad, "InvalidLogo");
+    await expect(
+      createWithLogo(alice)("Alpha", "ALP", supply, `https://${"a".repeat(200)}`)
+    ).to.be.revertedWithCustomError(launchpad, "InvalidLogo");
+
+    await createWithLogo(alice)("Alpha", "ALP", supply, logo);
+    await createWithLogo(bob)("Beta", "BETA", supply, ipfs);
+    const listed = await launchpad.allTokens();
+    expect(await launchpad.tokenLogo(listed[0].token)).to.equal(logo);
+    expect(await launchpad.tokenLogo(listed[1].token)).to.equal(ipfs);
+
+    const fee = await launchpad.quoteRelay(0);
+    await launchpad.connect(alice).relay(0, { value: fee });
+    const sent = await omnichain.endpoints[0].sentMessage(0);
+    const destIndex = omnichain.eids.findIndex((eid) => eid === Number(sent.dstEid));
+    const destPad = omnichain.pads[destIndex];
+    await omnichain.endpoints[destIndex].deliver(
+      await destPad.getAddress(),
+      omnichain.eids[0],
+      await launchpad.getAddress(),
+      sent.guid,
+      sent.nonce,
+      sent.message
+    );
+    await destPad.finalizeRemote(omnichain.eids[0], 0);
+    const mirrored = await destPad.allTokens();
+    expect(await destPad.tokenLogo(mirrored[0].token)).to.equal(logo);
   });
 
   it("reverts while the launchpad cannot fund the NIX side of the pool", async function () {

@@ -7,6 +7,7 @@ import { abis } from "@/config/contracts";
 import { asBigint, asNumber } from "@/lib/amount";
 import { configOf } from "@/lib/bridge";
 import { deploymentFor, liveReadQuery, optionalAddress } from "@/lib/deployment";
+import { useTokenLogos } from "@/hooks/useTokenLogos";
 import { parseLaunches } from "@/lib/markets";
 
 export type Holding = {
@@ -15,6 +16,8 @@ export type Holding = {
   name?: string;
   decimals?: number;
   balance?: bigint;
+  /** On-chain logo link from the launchpad. Absent for NIX and for tokens launched without one. */
+  logoURI?: string;
   loading: boolean;
   error: boolean;
 };
@@ -41,6 +44,8 @@ export function useChainHoldings(chainId: number) {
     query: { enabled: Boolean(launchpad), ...liveReadQuery },
   });
   const rows = useMemo(() => (launches.isSuccess ? parseLaunches(launches.data) : []), [launches.data, launches.isSuccess]);
+  const logoTokens = useMemo(() => rows.map((row) => row.token), [rows]);
+  const logoBook = useTokenLogos(launchpad, logoTokens, chainId);
 
   const tokenCount = useReadContract({
     address: bridge,
@@ -137,6 +142,7 @@ export function useChainHoldings(chainId: number) {
       symbol: symbol?.status === "success" && typeof symbol.result === "string" ? symbol.result.trim() : undefined,
       decimals: decimals?.status === "success" ? asNumber(decimals.result) : undefined,
       balance: balance?.status === "success" ? asBigint(balance.result) : undefined,
+      logoURI: logoBook.logos.get(token.toLowerCase()),
       loading: (metaWaiting || balanceWaiting) && !failed,
       error: failed,
     };

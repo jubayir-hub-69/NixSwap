@@ -11,7 +11,8 @@ import {LaunchToken} from "./LaunchToken.sol";
 import {NixPair} from "./NixPair.sol";
 
 /// @title NixLaunchpad
-/// @notice One signature deploys a fixed-supply omnichain token and seeds its NIX pair.
+/// @notice Deploys a fixed-supply omnichain token and seeds its NIX pair.
+///         `createToken` can also take an optional https or ipfs logo link.
 ///         Supply is split across the three supported chains: 2% in each chain's pool
 ///         (6% in total) and the remaining 94% to the creator on the source chain.
 ///         `relay` sends a LayerZero message to each peer launchpad. Anyone can then
@@ -27,7 +28,9 @@ contract NixLaunchpad is Ownable, ReentrancyGuard {
     uint256 public constant CHAIN_COUNT = 3;
     /// @dev NIX paired with one chain's 2% token reserve. Funded ahead of launches via `fundSeed`.
     uint256 public constant SEED_NIX = 100 ether;
-    uint128 public constant LAUNCH_LZ_GAS = 350_000;
+    /// @dev Covers `lzReceive` storing the token name, symbol, and an optional logo link.
+    uint128 public constant LAUNCH_LZ_GAS = 500_000;
+    uint256 public constant MAX_LOGO_URI = 200;
 
     IERC20 public immutable nix;
     ILayerZeroEndpointV2 public immutable endpoint;
@@ -72,9 +75,13 @@ contract NixLaunchpad is Ownable, ReentrancyGuard {
         bool finalized;
         string name;
         string symbol;
+        string logoURI;
     }
 
     TokenLaunch[] private _tokens;
+    /// @dev Public image link for a launched token. Empty when the creator did not set one.
+    ///      The source chain writes it in `createToken`. Each peer copies it in `finalizeRemote`.
+    mapping(address token => string logoURI) public tokenLogo;
     /// @dev One-based index of the creator's active launch. Zero means none.
     mapping(address creator => uint256 indexPlusOne) private _activeId;
     mapping(uint256 id => bool mirrored) public mirrored;
@@ -86,6 +93,7 @@ contract NixLaunchpad is Ownable, ReentrancyGuard {
     mapping(uint32 srcEid => mapping(bytes32 sender => mapping(uint64 nonce => bool used))) public inboundNonceUsed;
 
     event TokenLaunched(uint256 indexed id, address indexed creator, address token, address pair);
+    event TokenLogo(address indexed token, string logoURI);
     event LaunchSeeded(
         uint256 indexed id,
         uint256 creatorAmount,
@@ -116,6 +124,7 @@ contract NixLaunchpad is Ownable, ReentrancyGuard {
 
     error InvalidName();
     error InvalidSymbol();
+    error InvalidLogo();
     error InvalidSupply();
     error ActiveTokenExists(uint256 id);
     error NotCreator(address creator);
@@ -271,6 +280,24 @@ contract NixLaunchpad is Ownable, ReentrancyGuard {
         external
         returns (uint256 id, address token, address pair)
     {
+        return _createToken(name_, symbol_, supply, "");
+    }
+
+    /// @notice Same launch as `createToken(name, symbol, supply)`, plus a public logo link.
+    ///         `logoURI` may be empty. Otherwise it must be an `https://` or `ipfs://` URL of at most 200 bytes.
+    ///         The link is stored for this token and copied onto each peer chain when that pool is finalized.
+    function createToken(string calldata name_, string calldata symbol_, uint256 supply, string calldata logoURI_)
+        external
+        returns (uint256 id, address token, address pair)
+    {
+        return _createToken(name_, symbol_, supply, logoURI_);
+    }
+
+    function _createToken(string calldata name_, string calldata symbol_, uint256 supply, string memory logoURI_)
+        internal
+        returns (uint256 id, address token, address pair)
+    {
+        _checkLogo(logoURI_);
         _checkLaunch(name_, symbol_, supply);
         (uint256 creatorAmount, uint256 liquidityTokens) = _split(supply);
         LaunchToken created = LaunchToken(
@@ -279,6 +306,7 @@ contract NixLaunchpad is Ownable, ReentrancyGuard {
         _requireLocalMint(created, msg.sender, creatorAmount, liquidityTokens, supply);
         NixPair createdPair = NixPair(factory.deployPair(nix, IERC20(address(created))));
         id = _record(address(created), address(createdPair), name_, symbol_, supply, msg.sender, true, false);
+        _setLogo(address(created), logoURI_);
         _seed(created, createdPair, liquidityTokens);
         token = address(created);
         pair = address(createdPair);
@@ -396,6 +424,7 @@ contract NixLaunchpad is Ownable, ReentrancyGuard {
         _seed(created, createdPair, order.liquidity);
         order.finalized = true;
         _record(address(created), address(createdPair), order.name, order.symbol, order.supply, order.creator, false, true);
+        _setLogo(address(created), order.logoURI);
         token = address(created);
         pair = address(createdPair);
         emit RemoteLaunchSeeded(srcEid, srcId, token, pair, order.liquidity, SEED_NIX);
@@ -434,6 +463,7 @@ contract NixLaunchpad is Ownable, ReentrancyGuard {
         address sourceToken;
         address creator;
         address predicted;
+        string logoURI;
     }
 
     function _authorize(uint32 srcEid, bytes calldata message) internal {
@@ -450,12 +480,14 @@ contract NixLaunchpad is Ownable, ReentrancyGuard {
             incoming.liquidity,
             incoming.sourceToken,
             incoming.creator,
-            incoming.predicted
-        ) = abi.decode(message, (uint256, string, string, uint256, uint256, address, address, address));
+            incoming.predicted,
+            incoming.logoURI
+        ) = abi.decode(message, (uint256, string, string, uint256, uint256, address, address, address, string));
     }
 
     function _storeOrder(uint32 srcEid, Incoming memory incoming) private {
         _checkName(incoming.name, incoming.symbol);
+        _checkLogo(incoming.logoURI);
         if (incoming.supply == 0 || incoming.supply > MAX_SUPPLY || incoming.liquidity != _perChain(incoming.supply)) {
             revert InvalidSupply();
         }
@@ -473,6 +505,7 @@ contract NixLaunchpad is Ownable, ReentrancyGuard {
         order.authorized = true;
         order.name = incoming.name;
         order.symbol = incoming.symbol;
+        order.logoURI = incoming.logoURI;
         emit RemoteAuthorized(srcEid, incoming.srcId, incoming.predicted, incoming.liquidity);
     }
 
@@ -481,6 +514,32 @@ contract NixLaunchpad is Ownable, ReentrancyGuard {
         uint256 symbolLength = bytes(symbol_).length;
         if (nameLength == 0 || nameLength > 32) revert InvalidName();
         if (symbolLength == 0 || symbolLength > 11) revert InvalidSymbol();
+    }
+
+    /// @dev Empty is allowed. Any other value must be a short https or ipfs URL with no spaces or control bytes.
+    function _checkLogo(string memory logoURI_) internal pure {
+        bytes memory data = bytes(logoURI_);
+        uint256 length = data.length;
+        if (length == 0) return;
+        if (length > MAX_LOGO_URI) revert InvalidLogo();
+        if (!_hasPrefix(data, "https://") && !_hasPrefix(data, "ipfs://")) revert InvalidLogo();
+        for (uint256 i = 0; i < length; i++) {
+            if (data[i] <= 0x20 || data[i] >= 0x7f) revert InvalidLogo();
+        }
+    }
+
+    function _hasPrefix(bytes memory data, bytes memory prefix) private pure returns (bool) {
+        if (data.length <= prefix.length) return false;
+        for (uint256 i = 0; i < prefix.length; i++) {
+            if (data[i] != prefix[i]) return false;
+        }
+        return true;
+    }
+
+    function _setLogo(address token, string memory logoURI_) internal {
+        if (bytes(logoURI_).length == 0) return;
+        tokenLogo[token] = logoURI_;
+        emit TokenLogo(token, logoURI_);
     }
 
     /// @dev A source launch mints the creator share plus one pool share, which is less than the cap.
@@ -572,7 +631,17 @@ contract NixLaunchpad is Ownable, ReentrancyGuard {
         return MessagingParams({
             dstEid: dstEid,
             receiver: remote.peer,
-            message: abi.encode(id, launch.name, launch.symbol, launch.supply, liquidity, launch.token, launch.creator, predicted),
+            message: abi.encode(
+                id,
+                launch.name,
+                launch.symbol,
+                launch.supply,
+                liquidity,
+                launch.token,
+                launch.creator,
+                predicted,
+                tokenLogo[launch.token]
+            ),
             options: abi.encodePacked(uint16(3), uint8(1), uint16(17), uint8(1), LAUNCH_LZ_GAS),
             payInLzToken: false
         });

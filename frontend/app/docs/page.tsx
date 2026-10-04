@@ -8,7 +8,7 @@ import { addressUrl } from "@/lib/deployment";
 export const metadata: Metadata = {
   title: "Docs · NixSwap",
   description:
-    "NixSwap documentation for confidential swaps, liquidity, contracts, and the developer API on Sepolia testnets.",
+    "NixSwap documentation for confidential swaps, liquidity, on-chain token logos, contracts, and the developer API on Sepolia testnets.",
 };
 
 const sections = [
@@ -98,7 +98,7 @@ export default function DocsPage() {
             {[
               ["/swap", "Swap", "Encrypt an order. The solver fills it on NixPair."],
               ["/bridge", "Bridge", "Lock and release NIX, or burn and mint a launched token."],
-              ["/launch", "Launch", "Create a token. 94% to you, 2% liquidity on each chain."],
+              ["/launch", "Launch", "Create a token and an optional on-chain logo. 94% to you, 2% liquidity on each chain."],
               ["/pool", "Pool", "Add or withdraw your own NixPair liquidity."],
               ["/markets", "Markets", "Public spot, reserves, and window volume."],
               ["/portfolio", "Portfolio", "Balances, send, receive, and recent history."],
@@ -116,6 +116,17 @@ export default function DocsPage() {
             seeds 2% of the supply with 100 NIX into its own NixPair. That opening liquidity stays on the
             launchpad. The faucet pays the on-chain <span className="font-mono text-frost">FAUCET_DRIP</span> once
             per address per day. The current token source sets that drip at 500 NIX.
+          </P>
+          <P>
+            The Launch form can take a token logo URL. An <span className="font-mono text-frost">https://</span> or{" "}
+            <span className="font-mono text-frost">ipfs://</span> link of at most 200 bytes is stored permanently in{" "}
+            <span className="font-mono text-frost">tokenLogo</span> and emitted as{" "}
+            <span className="font-mono text-frost">TokenLogo</span>. The same link is appended to the LayerZero
+            launch message, so <span className="font-mono text-frost">finalizeRemote</span> writes it on each peer
+            chain. Portfolio, Launch, and Markets read that storage and show the image to every wallet. A blank
+            link, a rejected link, or an image that fails to load keeps the symbol letter. An{" "}
+            <span className="font-mono text-frost">ipfs://</span> link is loaded through{" "}
+            <span className="font-mono text-frost">https://ipfs.io/ipfs/</span>.
           </P>
           <P>
             The app is Next.js, React, wagmi, and RainbowKit. Contracts are Solidity 0.8.28. Confidential orders
@@ -288,9 +299,15 @@ function removeLiquidity(uint256 shares) external returns (uint256 nixOut, uint2
             Approve both tokens to the pair, then pass the quoted pull. The pair can pull less than the arguments
             so the reserve ratio holds. <span className="font-mono text-frost">removeLiquidity</span> reverts with{" "}
             <span className="font-mono text-frost">InsufficientShares</span> when the caller does not own the
-            shares. Launch with <span className="font-mono text-frost">createToken(name, symbol, supply)</span>{" "}
-            where supply is the shared cap in wei, then <span className="font-mono text-frost">relay</span> and{" "}
-            <span className="font-mono text-frost">finalizeRemote</span>. Bridge NIX with{" "}
+            shares. Launch with <span className="font-mono text-frost">createToken(name, symbol, supply)</span> or{" "}
+            <span className="font-mono text-frost">createToken(name, symbol, supply, logoURI)</span>.{" "}
+            <span className="font-mono text-frost">logoURI</span> is optional. A non-empty value must be an https://
+            or ipfs:// link of at most 200 bytes. The launchpad stores it in{" "}
+            <span className="font-mono text-frost">tokenLogo(token)</span>.{" "}
+            <span className="font-mono text-frost">relay</span> carries that string in the LayerZero payload, and{" "}
+            <span className="font-mono text-frost">finalizeRemote</span> copies it onto the peer token. Supply is the
+            shared cap in wei. After the source launch, relay and finalize place the other pools and the logo.
+            Bridge NIX with{" "}
             <span className="font-mono text-frost">NixBridge.send(dstEid, tokenId, amount, recipient)</span>.{" "}
             <span className="font-mono text-frost">dstEid</span> is the LayerZero endpoint id, and the NIX token id
             is <span className="font-mono text-frost">keccak256(&quot;NIX&quot;)</span>. A launched token uses{" "}

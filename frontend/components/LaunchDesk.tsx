@@ -6,6 +6,7 @@ import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { erc20Abi } from "viem";
 import { useAccount, useBalance, useReadContract, useReadContracts, useSwitchChain } from "wagmi";
 import { abis } from "@/config/contracts";
+import { TokenMark } from "@/components/TokenMark";
 import { TxButtonContent } from "@/components/TxButton";
 import { TxNotice } from "@/components/TxNotice";
 import { useChainTx } from "@/hooks/useChainTx";
@@ -13,6 +14,7 @@ import { useLaunches } from "@/hooks/useLaunches";
 import { asBigint, formatUnits, parseUnits } from "@/lib/amount";
 import { bridgeChain, bridgeChains } from "@/lib/bridge";
 import { deploymentFor, errorText, optionalAddress, preferredChainId } from "@/lib/deployment";
+import { isLogoURI } from "@/lib/logo";
 import { shortAddress, type LaunchRow } from "@/lib/markets";
 
 const MAX_SUPPLY = 1_000_000_000_000n * 10n ** 18n;
@@ -178,7 +180,9 @@ function LaunchCard({
   return (
     <article className="rounded-2xl border border-white/10 px-3 py-3">
       <div className="flex items-start justify-between gap-3">
-        <div>
+        <div className="flex min-w-0 items-start gap-3">
+          <TokenMark symbol={row.symbol} logoURI={row.logoURI} size="sm" />
+          <div className="min-w-0">
           <p className="text-sm text-frost">
             {row.name} <span className="text-cyan-glow">{row.symbol}</span>
           </p>
@@ -196,6 +200,7 @@ function LaunchCard({
               {held === undefined ? "Reading your wallet…" : `In your wallet: ${formatUnits(held, 18)} ${row.symbol}`}
             </p>
           ) : null}
+          </div>
         </div>
         <span className="rounded-full bg-white/5 px-2 py-1 text-[11px] text-mist">{badge}</span>
       </div>
@@ -292,6 +297,7 @@ export function LaunchDesk() {
   });
   const [name, setName] = useState("");
   const [symbol, setSymbol] = useState("");
+  const [logo, setLogo] = useState("");
   const [supply, setSupply] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [action, setAction] = useState<"create" | "retire" | null>(null);
@@ -299,8 +305,10 @@ export function LaunchDesk() {
   const supplyRaw = /^\d+$/.test(supply) ? parseUnits(supply, 18) : supply === "" ? undefined : null;
   const trimmedName = name.trim();
   const trimmedSymbol = symbol.trim();
+  const trimmedLogo = logo.trim();
   const nameOk = byteLength(trimmedName) > 0 && byteLength(trimmedName) <= 32;
   const symbolOk = byteLength(trimmedSymbol) > 0 && byteLength(trimmedSymbol) <= 11;
+  const logoOk = isLogoURI(trimmedLogo);
   const quotedBps = bpsPerChain ?? liquidityBps ?? LIQUIDITY_BPS;
   const quotedPools = poolCount ?? (legacy ? 1n : 3n);
   const perChain = supplyRaw && supplyRaw > 0n ? (supplyRaw * quotedBps) / BPS : undefined;
@@ -351,6 +359,10 @@ export function LaunchDesk() {
         setFormError("Enter a symbol of 11 bytes or fewer.");
         return;
       }
+      if (!logoOk) {
+        setFormError("Token logo must be an https:// or ipfs:// link, or leave it blank.");
+        return;
+      }
       const supplyProblem = supplyError();
       if (supplyProblem || !supplyRaw) {
         setFormError(supplyProblem ?? "Enter a total supply, for example 10000000.");
@@ -376,13 +388,14 @@ export function LaunchDesk() {
             address: launchpadAddress,
             abi: abis.NixLaunchpad,
             functionName: "createToken",
-            args: [trimmedName, trimmedSymbol, supplyRaw],
+            args: trimmedLogo ? [trimmedName, trimmedSymbol, supplyRaw, trimmedLogo] : [trimmedName, trimmedSymbol, supplyRaw],
             account: address,
             chainId: walletChainId,
           }),
         );
         setName("");
         setSymbol("");
+        setLogo("");
         setSupply("");
         await launches.refetch();
       } catch (error) {
@@ -486,6 +499,28 @@ export function LaunchDesk() {
                 className="mt-1 w-full rounded-2xl border border-white/10 bg-ink px-3 py-3 text-sm text-frost"
               />
             </label>
+            <label className="block text-xs text-mist">
+              Token logo URL
+              <input
+                data-testid="launch-logo"
+                value={logo}
+                inputMode="url"
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="https://… or ipfs://…"
+                aria-label="Token logo URL"
+                onChange={(event) => {
+                  setLogo(event.target.value);
+                  setFormError(null);
+                }}
+                className="mt-1 w-full rounded-2xl border border-white/10 bg-ink px-3 py-3 text-sm text-frost"
+              />
+            </label>
+            {trimmedLogo && !logoOk ? (
+              <p className="text-xs text-rose-300">Use an https:// or ipfs:// link of 200 characters or fewer, or leave this blank.</p>
+            ) : (
+              <p className="text-xs text-mist">Optional. The link is stored on-chain and shown on every network after the launch is relayed.</p>
+            )}
             <label className="field-well block rounded-3xl px-4 py-3">
               <span className="text-xs text-mist">Total supply</span>
               <input
